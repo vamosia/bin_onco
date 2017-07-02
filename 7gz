@@ -1,0 +1,1 @@
+for i in *gz; do echo $i; 7z x $i; A=`basename $i .gz`; echo $A; 7z x $A; done;
