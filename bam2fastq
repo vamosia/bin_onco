@@ -1,0 +1,2 @@
+FILE=`basename $1 .bam`;
+samtools bam2fq $1 > $FILE.fastq

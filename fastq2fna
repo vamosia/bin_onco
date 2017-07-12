@@ -1,1 +1,3 @@
-sed '/^@/!d;s//>/;N' $1
+#sed '/^@/!d;s//>/;N' $1
+FILE=`basename $1 .fastq`;
+seqtk seq -A $1 > $FILE.fna
