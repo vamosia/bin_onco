@@ -1,0 +1,31 @@
+package Bio::Cbioportal;
+use strict;
+use warnings;
+use Data::Dumper;
+use lib "/home/ionadmin/bin";
+use Bio::Gene;
+
+my $entrez;
+
+sub new {
+    my $class = shift;
+    my $self = {};
+    bless $self, $class;
+    
+    return $self;
+}
+
+sub load_entrez {
+    my ($class, %param )
+	= @_;
+
+    my $gene = new Bio::Gene;
+
+    $entrez = $gene->load_entrez( -file => $param{ -file } );
+}
+
+sub fix_entrez {
+
+}
+
+1;
