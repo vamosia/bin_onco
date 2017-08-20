@@ -4,6 +4,7 @@ use warnings;
 use Data::Dumper;
 use lib "/home/ionadmin/bin";
 use Bio::Gene;
+use Bio::Generic qw(read_file debug );
 
 my $entrez;
 my %options;
@@ -22,29 +23,62 @@ sub new {
     
 }
 
-
-sub load_entrez {
-
+sub load_file {
+    
     my ($self,
 	%param ) = @_;
-
-    open( IN, "<$param{ -file }" );
+    
+    open( IN, "<$param{ -file }" ) or die "$!\n";
+    
     
     my $header = 0;
     my @header;
     my %data;
+    my $delim = $param{ -delim } || "\t";
+    
     while( <IN> ) {
 	chomp $_;
-	
+
 	if( $header == 0 ) {
 	    
-	    @header = split( /\t/, $_ );
+	    @header = split( /$delim/, $_ );
 	    $header ++;
+	    next;
 	}
 	
-	my @line = split( /\t/, $_ );
+	my @line = split( /$delim/, $_ );
+	
+	my %line;
+	
+	@line{ @header } = @line;
+		
+	
+	my $key = $line{ $param{ -id } } || "";
+	my $val = $line{ $param{ -val } } || "";
 
-	$data{ $line[0] } = $line[1];
+	# Concatenate ID as needed
+	if( $param{ -id } =~ /\+/ ) {
+
+	    foreach( split( /\+/, $param{ -id } ) ){
+		$key .= $line{ $_ } . "+";
+	    }
+	    
+	    chop $key;
+	    
+	} 
+
+	if( exists $data{ $key } && $data{ $key } != $val ) {
+	    
+	    debug( -id => 'WARNING',
+		   -val => "$key | $line{ 'gene_symbol' } > Duplicate Source Value $data{ $key } != $val" );
+	    
+	}
+	
+	
+	$data{ $key } = $val;
+
+	
+	
 	
     }
     
@@ -57,75 +91,116 @@ sub map_column {
 
     my ($self, 
 	%param ) = @_;
-    
+
     my $header = 0;
     my @header;
     my %header;
-    my $totalNA = 0;
-    my $totalFIX = 0;
+    my %fix;
 
-    
-    
-    open( IN, "< $param{ -file }" );
 
-    open( OUT, ">$param{ -file }.fix" );
+    open( IN, "< $param{ -file_in }" );
+
+    open( OUT, ">$param{ -file_out }" );
     
     while( <IN> ) {
+	    
 	chomp $_;
+
 	next if( $_ =~ /^#/ );
+
+	$_ =~ s/\[Not.Available\]/NA/g;
 
 	if( $header == 0 ) {
 
 	    @header = split( /\t/, $_ );
 
-	    my $index = 0;
-	    foreach( @header ) {
-		
-		$header{ $_ } = $index;
-		$index++;
-		
-	    }
 	    print OUT join( "\t", @header );
+
+	    print OUT "\n";
 	    $header++;
 	    next;
 	    
 	}
 	
 	my @line = split( /\t/, $_ );
-	
-	my $id_x = $header{ $param{ '-id' } };
-	my $id = $line[ $id_x ];
-	
-	my $val_x = $header{ $param{ '-val' } };
-	my $val = $line[ $val_x ];
-	
-	if( $val eq 'NA' ) {
-	    
-	    $totalNA++;
-	    
-	    if ( exists $param{ -data }->{ $id } ) {
+	my %line;
+	@line{ @header } = @line;
 
-		my $new_val = $param{ -data }->{ $id };
+
+	my $id;
+	my $val;
+
+	for my $idx ( 0 .. $#{ $param{ -id } } ) {
+	    	    
+	    my @key_val = split( />/, $param{ -id }[ $idx ] );
+
+	    # Concatenate ID as needed
+	    if( $key_val[0] =~ /\+/ ) {
 		
-		$line[ $val_x ] = $new_val;
-		
-		if( $options{ -d } ) {
-		    print "           ->  [$id] : $val > $new_val\n";
+		foreach( split( /\+/, $key_val[0] ) ){
+		    
+		    $id .= $line{ $_ } . "+";
 		}
-
-		$totalFIX++;
 		
+		chop $id;
+		
+	    } else {
+		$id = $line{ $key_val[0] };
 	    }
+	    
+	    $val = $line{ $key_val[1] };
+
+	    if( $val eq 'NA' ) {
+
+		$fix{ total }++;
+
+		# If there is a dot on the Entrez name, don't count it probably not valid
+		$fix{ total }-- if( ($key_val[0] =~ 'Hugo_Symbol') && $id =~ /\./ );
+		
+		if ( exists $param{ -data }[ $idx ]->{ $id } ) {
+
+		    $fix{ $key_val[1] }++;
+		    
+		    my $new_val = $param{ -data }[ $idx ]->{ $id };
+
+		    $line{ $key_val[1] } = $new_val;
+
+
+		    #if( $key_val[1] eq "Entrez_Gene_Id" ){
+		#	print Dumper "$key_val[0] > $key_val[1] | $line{ $key_val[0] } > $line{ $key_val[1] }";
+		 #   }
+
+		    #if( $options{ -d } ) {
+		    #printf "%10s : %s > %s\n", $id, $val, $new_val;
+		    #}
+	
+		    #$totalFIX++;
+		    
+		}
+	    }
+	
+ 	}
+	my $p;
+	foreach( @header ) {
+	    $p .= $line{ $_ } . "\t";
 	}
-	print OUT join( "\t", @line );
-	print OUT "\n";
+	chomp $p;
+	print OUT "$p\n";
     }
+
     close( IN );
     close( OUT );
-    
 
-    printf "%-3d / %-3d : %s\n", $totalNA, $totalFIX, $param{ -file };
+    foreach( keys %fix ) {
+	
+	next if $_ =~ /total/;
+	
+	print "[INFO] Fixing : $_ ( $fix{$_} / $fix{'total'} )\n";
+    }
     
+    #debug( -id => 'INFO',
+    #-val => "Fixing : $param{ -val } ( $totalFIX / $totalNA )" );
+
 }
 
 1;

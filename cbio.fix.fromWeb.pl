@@ -13,10 +13,13 @@ GetOptions( "i=s" => \$options{ -i },
 
 #open( IN, "<$options{-i}" ) or die ($!);
 
+my $geneInfo_cbio = 'home/ionadmin/genome/hg19/cbioportal.gene_info';
+my $geneInfo_ncbi = 'home/ionadmin/genome/hg19/Homo_sapiens.gene_info';
+
 
 sub load_gene_info_cbio {
     
-    open( IN, "</srv/genome/hg19/cbioportal.gene_info" ) or die ($!);
+    open( IN, "<$geneInfo_cbio" ) or die ($!);
 
     $line = 0;
     @header;
@@ -58,7 +61,7 @@ sub load_gene_info_cbio {
 
 sub load_gene_info_ncbi {
     
-    open( IN, "</srv/genome/hg19/Homo_sapiens.gene_info" ) or die ($!);
+    open( IN, "</$geneInfo_ncbi" ) or die ($!);
 
     $line = 0;
     @header;
@@ -138,12 +141,9 @@ sub fix_file {
 	if( $line == 0 ) {
 	    @header = split( '\s', $_ );
 	    
-	    
-	    
 	    # if header = 0, then this is most likely something like
 	    # #version 2.5
 	    # we can just skip this
-	    
 	    
 	    if( $#header < 3 ) {
 		@header = undef;
@@ -207,87 +207,3 @@ sub fix_file {
     close( OUT );
 	  
 }
-
-#load_gene_info_cbio();
-#%gene_info = %{ retrieve( '/tmp/gene.info.cbio.storable' ) };
-#@gene_info = @{ retrieve( '/tmp/gene.info.cbio.array.storable' ) };
-
-#load_gene_info_ncbi();
-#%gene_info = %{ retrieve( '/tmp/gene.info.ncbi.storable' ) };
-
-sub load_tcga {
-
-    open( IN, "<data_mutations_extended.txt" ) or die ($!);
-
-    my $cnt = 0;
-    %header;
-    @header;
-    %data;
-
-    @query;
-
-    my $api = "'www.cbioportal.org/public-portal/webservice.do?cmd=getMutationData&case_set_id=gbm_tcga_all&genetic_profile_id=gbm_tcga_mutations&gene_list='";
-    
-    while( <IN> ) {
-	chomp $_;
-	if( $cnt == 0 ) {
-	    
-	    @header = split( /\t/, $_ );
-	    next if ( $#header < 2 );
-	    $cnt++;
-	    next;
-	}
-	# 1 = Hugo_Symbol
-	# 2 = Entrez_gene_id
-
-	my @line = split( /\t/, $_ );
-	my $gene = $line[0];
-	push( @query, $gene );
-
-	if( $cnt %100 == 0) {
-	    system( "wget -O data_mutation_exteded.txt.$cnt $api" . join( ",", @query ) );
-	    sleep 1;
-	}
-	
-	$cnt++;
-    }
-    
-    close( IN );
-}
-
-load_tcga();
-
-__END__
-
-my $api = "'www.cbioportal.org/public-portal/webservice.do?cmd=getMutationData&case_set_id=gbm_tcga_all&genetic_profile_id=gbm_tcga_mutations&gene_list='";
-
-my @list;
-
-for my $i ( 0 .. $#gene_info ) {
-    
-    if( $i % 100 == 0 || $i == $#gene_info ) {
-
-	my $gene_list = join( ",", @list);
-
-	$api .= join( ",", @list );
-	
-	system( "wget -O a.$i $api" );
-	system( "more a.$i | wc -l" );
-	@list = undef;
-	sleep 1;
-	
-    }
-    
-    push( @list, $gene_info[$i] );
-    
-}
-
-
-
-
-#print "Loading Storabe ...\n";
-
-
-
-#fix_file();
-

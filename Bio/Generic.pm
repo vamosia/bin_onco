@@ -61,9 +61,11 @@ sub debug {
     my $tag = $param{ -t } || "";
     
     if( $tag eq 'id' ) {
+	
 	print "[$id]" . '-' x 40 . "\n";
 	print "[$id] $param{ -val }\n";
 	print "[$id]" . '-' x 40 . "\n";
+	print "[$id]\n";
 	
     } else {
 	print "[$id] $param{ -val }\n";
