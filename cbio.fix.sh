@@ -12,7 +12,7 @@ do cd $i
     then 
        	echo '>> [RUNNING]'
 	cp data_mutations_extended.txt data_mutations_extended.txt.BAK
-	more data_mutations_extended.txt | sed 's/\[Not.Available\]/[NA]/g' | sed 's/---/NA/g' > a;
+	more data_mutations_extended.txt | sed 's/\[Not.Available\]/NA/g' | sed 's/---/NA/g' > a;
 	mv a data_mutations_extended.txt;
     else
 	echo '>> [SKIP] : does not exists'

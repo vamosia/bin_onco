@@ -6,6 +6,7 @@ use Data::Dumper;
 use Bio::Generic qw(read_file debug );
 use Bio::Cbioportal;
 use Getopt::Long;
+use Storable;
 
 my %options;
 $options{ -d } = 0;
@@ -16,6 +17,7 @@ GetOptions( 'd=s'    => \$options{ -d }
 #'gene_symbol',
 # Hugo_Symbol
 my %id = ( 'cbio' => ['entrez_gene_id',
+		      'sequencing_center',
 		      'case_id',
 		      'start_position',
 		      'end_position',
@@ -23,14 +25,16 @@ my %id = ( 'cbio' => ['entrez_gene_id',
 		      
 	   
 	   'local' => ['Entrez_Gene_Id',
+		       'Center',
 		       'Tumor_Sample_Barcode',		       
 		       'Start_Position',
 		       'End_Position',
 		       'HGVSp_Short|MA:protein.change|amino_acid_change|AAChange']);
 
-# my $study = `pwd`; 
-# chomp $study;
-# $study =~ s/.*\/tcga\/(.*?)\/data_mutations_extended.BAK/$1/;
+my $cbio_dat;
+my $study = `pwd`; 
+chomp $study;
+$study =~ s/.*\/tcga\/(.*?)\/data_mutations_extended.BAK/$1/;
 
 # debug( -t => "id",
 #        -id => "INFO",
@@ -51,7 +55,7 @@ sub load_data_cbio {
 	# between cbioportal and local
 	# 'gene_symbol',
 	
-	my @id_val;
+ 	my @id_val;
 
 	foreach ( @{ $id{ 'cbio' } } ) {
 	    push( @id_val, $line->{ $_ } );
@@ -67,7 +71,9 @@ sub load_data_cbio {
 		    'reference_read_count_normal',
 		    'reference_read_count_tumor',
 		    'entrez_gene_id',
-		    'amino_acid_change' );
+		    'amino_acid_change',
+		    'mutation_type',
+		    'gene_symbol' );
 	
 	foreach ( @rep ) {
 	    
@@ -78,110 +84,148 @@ sub load_data_cbio {
 	
 	if( $cbio_dat{ $id }{ cnt } > 1 ) {
 	    debug( -id => 'DUPLICATE',
-		   -val => "CBIOPORTAL $id" );
+		   -val => "CBIOPORTAL $study | $cbio_dat{ $id }{ gene_symbol } | $id" );
 	}
 
     }
-    
+
     return( \%cbio_dat );
 }
 
-my $cbio_dat = load_data_cbio();
 
-# COUNT DUPLICATE
-open( IN, "< data_mutations_extended.txt.fix.entrez.chr" ) or die "$!\n";
 
-my @header;
-my %dup;
+sub duplicate_analysis {
 
-while( <IN> ) {
+    # COUNT DUPLICATE
+    open( IN, "< data_mutations_extended.txt.fix.entrez.chr" ) or die "$!\n";
+
+    my @header;
+    my %dup;
+    my %dup_remove;
     
-    chomp $_;
-
-    if( $_ =~ /^Hugo_Symbol/ ) {
+    while( <IN> ) {
 	
-	@header = split( /\t/, $_ );
+	chomp $_;
 
-	next;
-    }
-    
-    my @line = split( /\t/, $_ );
-    
-    my %line;
+	if( $_ =~ /^Hugo_Symbol/ ) {
+	    
+	    @header = split( /\t/, $_ );
 
-    @line{ @header } = @line;
+	    next;
+	}
+	
+	my @line = split( /\t/, $_ );
+	
+	my %line;
+
+	@line{ @header } = @line;
         
-    my @id_val;
-    
-    foreach ( @{ $id{ 'local'} } ) {
+	my @id_val;
 	
-	if( $_ =~ /\|/ ) {
-
-	    my @tag = split( '\|', $_ );
+	foreach ( @{ $id{ 'local'} } ) {
 	    
-	    foreach( @tag ) {
+	    if( $_ =~ /\|/ ) {
 
-		next unless exists( $line{ $_ } );
+		my @tag = split( '\|', $_ );
 		
-		$line{ $_ } =~ s/p\.//;
-		
-		my $id = join( "+", @id_val ) . '+' . $line{ $_ } || "";
-		
-		if (exists $cbio_dat->{ $id } ) {
-		    print "$id ---> YES $_\n" if ( $options{ -d } == 1);
-		    push( @id_val, $line{ $_ } );
-		    last;
+		foreach( @tag ) {
+
+		    next unless( exists( $line{ $_ } ) && defined $line{ $_ } );
+		    
+		    # Replace p.Y282K to Y282K
+		    $line{ $_ } =~ s/p\.//;
+		    
+		    # Relace Y219X to Y219*
+		    $line{ $_ } =~ s/(\d)X$/$1*/g if( $_ eq 'AAChange' && $line{ $_ } =~ /X$/);
+		    
+		    my $id = join( "+", @id_val ) . '+';
+		    $id .= $line{ $_ } || "";
+
+		    if (exists $cbio_dat->{ $id } ) {
+			print "$id ---> YES $_\n" if ( $options{ -d } == 1 && $_ ne 'HGVSp_Short' );
+			push( @id_val, $line{ $_ } );
+			last;
+		    }
 		}
+		
+	    } else {
+		push( @id_val, $line{ $_ } );
 	    }
+	}
+	my $id = join( "+", @id_val );    
+
+	$dup{ $id }{ cnt }++;
+	$dup{ $id }{ 'type' }{ $line{ 'Variant_Classification' } }++;
+	my @a;
+
+	push( @{ $dup{ $id }{ 'data' } }, \%line );
+	print Dumper $id;
+    
+    }
+    close( IN );
+
+    print Dumper \%dup;exit;
+    # Message for duplicate id
+    my $dup_cnt_NA = 0;
+    my $dup_cnt = 0;
+    foreach my $id ( keys %dup ) {
+	
+	if( $dup{ $id }{ cnt } > 1 && exists $cbio_dat->{ $id } ) {
 	    
-	} else {
-	    push( @id_val, $line{ $_ } );
+	    my $a = $cbio_dat->{ $id }{ 'reference_read_count_tumor' } || "-";
+	    my $b = $cbio_dat->{ $id }{ 'reference_read_count_normal' } || "-";
+	    my $c = $cbio_dat->{ $id }{ 'variant_read_count_tumor' } || "-";
+	    my $d = $cbio_dat->{ $id }{ 'variant_read_count_normal' } || "-";
+	    
+	    if( $a eq "NA" &&
+		$b eq "NA" &&
+		$c eq "NA" &&
+		$c eq "NA" ) {
+
+		$dup_cnt_NA++;
+		
+	    } else {
+		my $gene = $cbio_dat->{ $id }{ 'gene_symbol' } || "";
+		my $type = "";
+
+		foreach( $dup{ $id }{ 'type' } ) {
+		    while( my( $key, $val) = each( %{ $_ } ) ) {
+			$type .= "$key ($val),";
+		    }
+		}
+		chop $type;
+
+		debug( -id => "DUPLICATE",
+		       -val => "LOCAL : $type | $study | $gene |  $a,$b,$c,$d | $id ($dup{ $id }{ cnt })" );
+		
+		$dup_cnt++;
+	    }
 	}
     }
-    my $id = join( "+", @id_val );    
-
-    $dup{ $id }++;
-    
-}
-close( IN );
-
-# Message for duplicate id
-my $dup_cnt_NA = 0;
-my $dup_cnt = 0;
-foreach my $id ( keys %dup ) {
-    
-    if( $dup{ $id } > 1 && exists $cbio_dat->{ $id } ) {
-	
-	my $ttotcov = $cbio_dat->{ $id }{ 'reference_read_count_tumor' };
-	my $ntotcov = $cbio_dat->{ $id }{ 'reference_read_count_normal' };
-	
-	my $tvarcov = $cbio_dat->{ $id }{ 'variant_read_count_tumor' };
-	my $nvarcov = $cbio_dat->{ $id }{ 'variant_read_count_normal' };
-	                                   
-	if( $ttotcov eq "NA" &&
-	    $tvarcov eq "NA" &&
-	    $ntotcov eq "NA" &&
-	    $nvarcov eq "NA" ) {
-	    
-	} else {
-	    debug( -id => "DUPLICATE",
-		   -val => "LOCAL : $ttotcov, $tvarcov, $ntotcov, $nvarcov | $id ($dup{ $id })" );
-	    $dup_cnt++
-	}
-	
-	$dup_cnt_NA++
+    if( $dup_cnt > 0 ) {
+	printf "[WARNING] There are $dup_cnt_NA Duplicate ID with all NA\n";
+	printf "[WARNING] There are $dup_cnt Duplicate ID with some NA\n";
     }
+
+    return( \%dup );
 }
 
-if( $dup_cnt > 0 ) {
-    printf "[WARNING] There are $dup_cnt_NA Duplicate ID with NA\n";
-    printf "[WARNING] There are $dup_cnt Duplicate ID with no NA\n";
-}
+
+$cbio_dat = load_data_cbio();
+
+#store \$cbio_dat, '/tmp/file.storable';
+#$cbio_dat = retrieve( '/tmp/file.storable' );
+
+#debug( -id => 'INFO',
+#       -val => 'Processing Duplicate - data_mutation_extended.txt.fix.entrez.chr' );
+
+my $dup = duplicate_analysis();
 
 open( IN, "< data_mutations_extended.txt.fix.entrez.chr" ) or die "$!\n";
 open( OUT,"> data_mutations_extended.txt.fix.entrez.chr.refvar" ) or die "$!\n";
+open( NOTFIX,"> data_mutations_extended.txt.fix.entrez.chr.refvar.notfix" ) or die "$!\n";
     
-@header = ();
+my @header = ();
 my %line_match;
 
 while( <IN> ) {
@@ -213,14 +257,18 @@ while( <IN> ) {
 	    
 	    foreach( @tag ) {
 
-		next unless exists( $line{ $_ } );
-		
+		next unless( exists( $line{ $_ } ) && defined $line{ $_ } );
+
+		# Replace p.Y282K to Y282K
 		$line{ $_ } =~ s/p\.//;
+
+		# Relace Y219X to Y219*
+		$line{ $_ } =~ s/(\d)X$/$1*/g if( $_ eq 'AAChange' && $line{ $_ } =~ /X$/);
 		
-		my $id = join( "+", @id_val ) . '+' . $line{ $_ } || "";
+		my $id = join( "+", @id_val ) . '+';
+		$id .= $line{ $_ } || "";
 		
 		if (exists $cbio_dat->{ $id } ) {
-		    print "$id ---> YES $_\n" if ( $options{ -d } == 1);
 		    push( @id_val, $line{ $_ } );
 		    last;
 		} 
@@ -232,26 +280,27 @@ while( <IN> ) {
     }
     
     my $id = join( "+", @id_val );
-    
+
     if (exists $cbio_dat->{ $id } ) {
-
-	# Message for duplicate id
-	#if( $dup{ $id } > 1 ) {
-        #}
-
+	
 	my %map = ( 'Reference_Allele' => 'reference_allele',
 		    'Tumor_Seq_Allele1' => 'variant_allele',
-		    'ttotcov' => 'reference_read_count_tumor+variant_read_count_tumor',
-		    'tvarcov' => 'variant_read_count_tumor',
-		    'ntotcov' => 'reference_read_count_normal',
-		    'nvarcov' => 'variant_read_count_normal',
-		    'TToTcov' => 'reference_read_count_tumor+variant_read_count_tumor',
-		    'TVarCov' => 'variant_read_count_tumor',
-		    'NTotCov' => 'reference_read_count_normal',
-		    'NVarCov' => 'variant_read_count_normal' );
+		    't_depth' => 'reference_read_count_tumor+variant_read_count_tumor',
+		    't_ref_count' => 'reference_read_count_tumor',
+		    't_alt_count' => 'variant_read_count_tumor',
+		    'n_depth' => 'reference_read_count_normal+variant_read_count_normal',
+		    'n_ref_count' => 'reference_read_count_normal',
+		    'n_alt_count' => 'variant_read_count_normal' );
+
+	my $is_dup = $dup->{ $id }{ cnt } || 0;
+
 	
 	while ( my( $id_loc, $id_cbio) = each (%map)) {
 
+	    # if its a duplicate, only change the reference. Becase A32K can be T>A or T>G
+	    next if( $is_dup > 1 && ($id_cbio =~ /count/ or $id_cbio =~ /variant/) );
+	    
+    	    
 	    # skip if id doesn't exists in local file (i.e see brca file the header is different)
 	    next if( ! exists $line{ $id_loc } );
 	    
@@ -259,15 +308,17 @@ while( <IN> ) {
 
 	    my $new_val;
 
+	    # if + is entencountered, we need to add these two values
 	    if( $id_cbio =~ /\+/ ) {
-
-		my @line = split( /\+/, $id_cbio );
 		
-		foreach( @line ) {
-		    
-		    if( $cbio_dat->{ $id }{ $_ } eq 'NA' ) {
+		my @id_line = split( /\+/, $id_cbio );
+		
+		foreach( @id_line ) {
+
+		    if( $cbio_dat->{ $id }{ $_ } eq 'NA' || $cbio_dat->{ $id }{ $_ } eq '') {
 			$new_val = 'NA';
 			last;
+			
 		    } else {
 			$new_val += $cbio_dat->{ $id }{ $_ };
 		    }
@@ -279,9 +330,8 @@ while( <IN> ) {
 	    
 	    print "[INFO] $id_loc : $old_val >  $new_val\n" if( $options{ -d } == 1 );
 	    
+	    # Replace old values
 	    $line{ $id_loc } = $new_val;
-	    
-	    
 	}
 
 	$line_match{ yes }++;
@@ -289,26 +339,75 @@ while( <IN> ) {
     } else {
 	
 	$line_match{ no }++;
+	my $a = $line{ 'HGVSp_Short' } || "-";
+	my $b = $line{ 'MA:protein.change' } || "-";
+	my $c = $line{ 'amino_acid_change' } || "-";
+	my $d = $line{ 'AAChange' } || "-";
+	print NOTFIX "$line{ Variant_Classification } | $line{ Hugo_Symbol } | $id ($a,$b,$c,$d)\n";
 	
-	#debug( -id => 'NO_MATCH',
-	#       -val => $id );
+    }
+
+    # Check to see if we can restore the allele counts
+    # t_depth = t_ref_count + t_alt_count
+	
+    if( ! $line{ 't_depth' } =~ /\d/ ) {
+	if( $line{ 't_ref_count' } =~ /\d/ && $line{ 't_alt_count' } =~ /\d/ ) {
+	    $line{ 't_depth' } = $line{ 't_ref_count' } + $line{ 't_alt_count' };
+	}
+    }
+    if( ! $line{ 't_ref_count' } =~ /\d/  ) {
+	if( $line{ 't_depth' } =~ /\d/ && $line{ 't_alt_count' } =~ /\d/ ) {
+	    $line{ 't_ref_count' } = $line{ 't_depth'} - $line{ 't_alt_count' };
+	}
+	
+    }
+    if( ! $line{ 't_alt_count' } =~ /\d/ ) {
+	if( $line{ 't_depth' } =~ /\d/ && $line{ 't_ref_count' } =~ /\d/ ) {
+	    $line{ 't_alt_count' } = $line{ 't_depth' } - $line{ 't_ref_count' };
+	}
+    }
+
+    # n_depth = n_ref_count + n_alt_count
+    if( ! $line{ 'n_depth' } =~  /\d/ ) {
+	if( $line{ 'n_ref_count' } =~ /\d/ && $line{ 'n_alt_count' } =~ /\d/ ) {
+	    $line{ 'n_depth' } = $line{ 'n_ref_count' } + $line{ 'n_alt_count' };
+	}
+    }
+    if( ! $line{ 'n_ref_count' } =~ /\d/ ) {
+	if( $line{ 'n_depth' } =~ /\d/ && $line{ 'n_alt_count' } =~ /\d/ ) {
+	    $line{ 'n_ref_count' } = $line{ 'n_depth'} - $line{ 'n_alt_count' };
+	}
+	
+    }
+    if( ! $line{ 'n_alt_count' } =~ /\d/ ) {
+	if( $line{ 'n_depth' } =~ /\d/ && $line{ 'n_ref_count' } =~ /\d/ ) {
+	    $line{ 'n_alt_count' } = $line{ 'n_depth' } - $line{ 'n_ref_count' };
+	}
+    }
+
+    
+    
+    my $line = "";
+    
+    foreach( @header ) {
+	
+	$line .= $line{ $_ } || "";
+	$line .= "\t";
 	
     }
     
-    my $line;
-
-    foreach( @header ) {
-	$line .= $line{ $_ } . "\t";
-    }
-
     chop $line;
     print OUT $line,"\n";
     $line_match{ total }++;
     
 }
 
+my $yes = $line_match{ yes } || 0;
+my $total = $line_match{ total } || 0;
+
 debug( -id => "INFO",
-       -val => "Fixing : refvar ( $line_match{ yes } / $line_match{ total } )" );
+       -val => "Fixing : refvar ( $yes / $total )" );
  
 close( IN );
 close( OUT );
+close( NOTFIX );

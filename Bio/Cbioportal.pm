@@ -97,11 +97,17 @@ sub map_column {
     my %header;
     my %fix;
 
-
+    
     open( IN, "< $param{ -file_in }" );
 
     open( OUT, ">$param{ -file_out }" );
-    
+
+    # initialize fix
+    foreach( @{ $param{ -id } } ) {
+	my @array = split( ">", $_ );
+	$fix{ $array[1] } = 0;
+    }
+
     while( <IN> ) {
 	    
 	chomp $_;
@@ -133,7 +139,7 @@ sub map_column {
 	for my $idx ( 0 .. $#{ $param{ -id } } ) {
 	    	    
 	    my @key_val = split( />/, $param{ -id }[ $idx ] );
-
+	    
 	    # Concatenate ID as needed
 	    if( $key_val[0] =~ /\+/ ) {
 		
@@ -149,16 +155,16 @@ sub map_column {
 	    }
 	    
 	    $val = $line{ $key_val[1] };
-
-	    if( $val eq 'NA' ) {
-
+	    
+	    if( $val eq 'NA' or $val eq '0') {
+		
 		$fix{ total }++;
 
 		# If there is a dot on the Entrez name, don't count it probably not valid
 		$fix{ total }-- if( ($key_val[0] =~ 'Hugo_Symbol') && $id =~ /\./ );
 		
 		if ( exists $param{ -data }[ $idx ]->{ $id } ) {
-
+		    
 		    $fix{ $key_val[1] }++;
 		    
 		    my $new_val = $param{ -data }[ $idx ]->{ $id };
@@ -169,10 +175,10 @@ sub map_column {
 		    #if( $key_val[1] eq "Entrez_Gene_Id" ){
 		#	print Dumper "$key_val[0] > $key_val[1] | $line{ $key_val[0] } > $line{ $key_val[1] }";
 		 #   }
+		    
 
-		    #if( $options{ -d } ) {
-		    #printf "%10s : %s > %s\n", $id, $val, $new_val;
-		    #}
+		    # printf "%10s : %s > %s\n", $id, $val, $new_val;
+			
 	
 		    #$totalFIX++;
 		    
@@ -182,7 +188,8 @@ sub map_column {
  	}
 	my $p;
 	foreach( @header ) {
-	    $p .= $line{ $_ } . "\t";
+	    $p .= $line{ $_ } || "";
+	    $p .= "\t";
 	}
 	chomp $p;
 	print OUT "$p\n";
@@ -191,11 +198,14 @@ sub map_column {
     close( IN );
     close( OUT );
 
-    foreach( keys %fix ) {
+    foreach( sort keys %fix ) {
 	
 	next if $_ =~ /total/;
+
+	my $a = $fix{ $_ } || 0;
+	my $b = $fix{ 'total' } || 0;
 	
-	print "[INFO] Fixing : $_ ( $fix{$_} / $fix{'total'} )\n";
+	print "[INFO] Fixing : $_ ( $a / $b )\n";
     }
     
     #debug( -id => 'INFO',
