@@ -32,14 +32,10 @@ my %id = ( 'cbio' => ['entrez_gene_id',
 		       'HGVSp_Short|MA:protein.change|amino_acid_change|AAChange']);
 
 my $cbio_dat;
+my %entrez;
 my $study = `pwd`; 
 chomp $study;
 $study =~ s/.*\/tcga\/(.*?)\/data_mutations_extended.BAK/$1/;
-
-# debug( -t => "id",
-#        -id => "INFO",
-#        -val => "Study : $study" );
-
 		       
 
 sub load_data_cbio {
@@ -87,9 +83,9 @@ sub load_data_cbio {
 		   -val => "CBIOPORTAL $study | $cbio_dat{ $id }{ gene_symbol } | $id" );
 	}
 
+	$entrez{ $line->{ 'entrez_gene_id' } }++;	
     }
-
-    return( \%cbio_dat );
+        return( \%cbio_dat );
 }
 
 
@@ -158,13 +154,13 @@ sub duplicate_analysis {
 	$dup{ $id }{ 'type' }{ $line{ 'Variant_Classification' } }++;
 	my @a;
 
-	push( @{ $dup{ $id }{ 'data' } }, \%line );
-	print Dumper $id;
+	# push( @{ $dup{ $id }{ 'data' } }, \%line );
+
     
     }
     close( IN );
 
-    print Dumper \%dup;exit;
+
     # Message for duplicate id
     my $dup_cnt_NA = 0;
     my $dup_cnt = 0;
@@ -226,7 +222,7 @@ open( OUT,"> data_mutations_extended.txt.fix.entrez.chr.refvar" ) or die "$!\n";
 open( NOTFIX,"> data_mutations_extended.txt.fix.entrez.chr.refvar.notfix" ) or die "$!\n";
     
 my @header = ();
-my %line_match;
+my %fix;
 
 while( <IN> ) {
 
@@ -247,7 +243,6 @@ while( <IN> ) {
         
     my @id_val;
 
-    
     foreach ( @{ $id{ 'local'} } ) {
 
 	# check to see which aa would work
@@ -280,7 +275,7 @@ while( <IN> ) {
     }
     
     my $id = join( "+", @id_val );
-
+    
     if (exists $cbio_dat->{ $id } ) {
 	
 	my %map = ( 'Reference_Allele' => 'reference_allele',
@@ -316,73 +311,90 @@ while( <IN> ) {
 		foreach( @id_line ) {
 
 		    if( $cbio_dat->{ $id }{ $_ } eq 'NA' || $cbio_dat->{ $id }{ $_ } eq '') {
-			$new_val = 'NA';
+			$new_val = $cbio_dat->{ $id }{ $_ };
 			last;
 			
 		    } else {
 			$new_val += $cbio_dat->{ $id }{ $_ };
 		    }
+		    
 		}
-		
 	    } else {
 		$new_val = $cbio_dat->{ $id }{ $id_cbio };
 	    }
 	    
 	    print "[INFO] $id_loc : $old_val >  $new_val\n" if( $options{ -d } == 1 );
-	    
+
+	    next if $new_val eq 'NA';
+   
 	    # Replace old values
 	    $line{ $id_loc } = $new_val;
 	}
-
-	$line_match{ yes }++;
+	
+	$fix{ yes }++;
 	
     } else {
 	
-	$line_match{ no }++;
+	# IF ITS NOT IN CBIOPORTAL I DONT WANT TO SEE IT
+	
+	
 	my $a = $line{ 'HGVSp_Short' } || "-";
 	my $b = $line{ 'MA:protein.change' } || "-";
 	my $c = $line{ 'amino_acid_change' } || "-";
 	my $d = $line{ 'AAChange' } || "-";
-	print NOTFIX "$line{ Variant_Classification } | $line{ Hugo_Symbol } | $id ($a,$b,$c,$d)\n";
+	my $varClass = $line{ 'Variant_Classification' };
 	
+	my %ignore = qw(Silent 1 Intron 1 3'UTR 1 3'Flank 1 5'UTR 1 5'Flank 1 IGR 1 RNA 1);
+	
+	unless( exists $ignore{ $varClass } ) {
+	    
+	    # the local entrez doesn't exists in cbioportal, then skip it
+	    unless( exists $entrez{ $line{ 'Entrez_Gene_Id' } } ) {
+		$fix{ ignore_entrez }++;
+		#next;
+	    }
+	    
+	    print NOTFIX "$varClass | $line{ Hugo_Symbol } | $id ($a,$b,$c,$d)\n";
+	    $fix{ no }++;
+	} else {
+	    $fix{ ignore }++;
+	}
     }
 
     # Check to see if we can restore the allele counts
     # t_depth = t_ref_count + t_alt_count
 	
-    if( ! $line{ 't_depth' } =~ /\d/ ) {
-	if( $line{ 't_ref_count' } =~ /\d/ && $line{ 't_alt_count' } =~ /\d/ ) {
-	    $line{ 't_depth' } = $line{ 't_ref_count' } + $line{ 't_alt_count' };
-	}
-    }
-    if( ! $line{ 't_ref_count' } =~ /\d/  ) {
-	if( $line{ 't_depth' } =~ /\d/ && $line{ 't_alt_count' } =~ /\d/ ) {
-	    $line{ 't_ref_count' } = $line{ 't_depth'} - $line{ 't_alt_count' };
-	}
+    if( ! $line{ 't_depth' } =~ /\d/ && 
+	$line{ 't_ref_count' } =~ /\d/ && 
+	$line{ 't_alt_count' } =~ /\d/ ) {
+	
+	$line{ 't_depth' } = $line{ 't_ref_count' } + $line{ 't_alt_count' };
 	
     }
-    if( ! $line{ 't_alt_count' } =~ /\d/ ) {
-	if( $line{ 't_depth' } =~ /\d/ && $line{ 't_ref_count' } =~ /\d/ ) {
-	    $line{ 't_alt_count' } = $line{ 't_depth' } - $line{ 't_ref_count' };
-	}
+    if( ! $line{ 't_ref_count' } =~ /\d/ && 
+	$line{ 't_depth' } =~ /\d/ && 
+	$line{ 't_alt_count' } =~ /\d/ ) {
+	$line{ 't_ref_count' } = $line{ 't_depth'} - $line{ 't_alt_count' };
+	
+    }
+    if( ! $line{ 't_alt_count' } =~ /\d/  &&
+	$line{ 't_depth' } =~ /\d/ && $line{ 't_ref_count' } =~ /\d/ ) {
+	$line{ 't_alt_count' } = $line{ 't_depth' } - $line{ 't_ref_count' };
+    }
+    
+    # n_depth = n_ref_count + n_alt_count
+    if( ! $line{ 'n_depth' } =~  /\d/ && 
+	$line{ 'n_ref_count' } =~ /\d/ && $line{ 'n_alt_count' } =~ /\d/) {
+	$line{ 'n_depth' } = $line{ 'n_ref_count' } + $line{ 'n_alt_count' };
+    }
+    if( ! $line{ 'n_ref_count' } =~ /\d/ &&
+	$line{ 'n_depth' } =~ /\d/ && $line{ 'n_alt_count' } =~ /\d/ ) {
+	$line{ 'n_ref_count' } = $line{ 'n_depth'} - $line{ 'n_alt_count'  };
     }
 
-    # n_depth = n_ref_count + n_alt_count
-    if( ! $line{ 'n_depth' } =~  /\d/ ) {
-	if( $line{ 'n_ref_count' } =~ /\d/ && $line{ 'n_alt_count' } =~ /\d/ ) {
-	    $line{ 'n_depth' } = $line{ 'n_ref_count' } + $line{ 'n_alt_count' };
-	}
-    }
-    if( ! $line{ 'n_ref_count' } =~ /\d/ ) {
-	if( $line{ 'n_depth' } =~ /\d/ && $line{ 'n_alt_count' } =~ /\d/ ) {
-	    $line{ 'n_ref_count' } = $line{ 'n_depth'} - $line{ 'n_alt_count' };
-	}
-	
-    }
-    if( ! $line{ 'n_alt_count' } =~ /\d/ ) {
-	if( $line{ 'n_depth' } =~ /\d/ && $line{ 'n_ref_count' } =~ /\d/ ) {
-	    $line{ 'n_alt_count' } = $line{ 'n_depth' } - $line{ 'n_ref_count' };
-	}
+    if( ! $line{ 'n_alt_count' } =~ /\d/ &&
+	$line{ 'n_depth' } =~ /\d/ && $line{ 'n_ref_count' } =~ /\d/ ) {
+	$line{ 'n_alt_count' } = $line{ 'n_depth' } - $line{ 'n_ref_count' };
     }
 
     
@@ -398,15 +410,26 @@ while( <IN> ) {
     
     chop $line;
     print OUT $line,"\n";
-    $line_match{ total }++;
-    
+    $fix{ total }++;
 }
 
-my $yes = $line_match{ yes } || 0;
-my $total = $line_match{ total } || 0;
+my $yes = $fix{ 'yes' } || 0;
+my $no_varClass = $fix{ 'no_varClass' } || 0;
+my $no_entrez  = $fix{ 'no_entrez' } || 0;
+my $no  = $fix{ 'no' } || 0;
+my $total = $fix{ 'total' } || 0;
 
 debug( -id => "INFO",
        -val => "Fixing : refvar ( $yes / $total )" );
+
+debug( -id => "INFO",
+       -val => "Fixing : refvar - Ignored Variant Classification ( $no_varClass / $total )" );
+
+debug( -id => "INFO",
+       -val => "Fixing : refvar - Ignored Entrez  ( $no_entrez / $total )" );
+
+debug( -id => "INFO",
+       -val => "Fixing : refvar - Not Fixed ( $no / $total )" );
  
 close( IN );
 close( OUT );

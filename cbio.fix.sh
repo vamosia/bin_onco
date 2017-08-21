@@ -44,7 +44,7 @@ do cd $i
 	echo '>> [SKIP] : does not exists';
     fi
     
-    cd ../../;
+    cd ../;
 done
 
 #cbio.fix.entrez.pl;
