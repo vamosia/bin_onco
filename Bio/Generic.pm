@@ -73,4 +73,8 @@ sub debug {
     
 }
 
+sub counter {
+    
+}
+
 1;
