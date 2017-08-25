@@ -56,37 +56,38 @@ sub read_file {
 sub pprint {
     
     my %param = @_;
-    my $id = $param{ -id } || "INFO";
-    my $txt = $param{ -txt };
-    my $level = $param{ -lv };
+    my $tag = $param{ -tag } || "INFO";
+    my $val = $param{ -val };
+    my $id = $param{ -id };
     my $time  = `date`; chomp $time;
 
-    my $tag = "[$time] [" . uc($id) ."] ";
+    my $foo = "[$time] [" . uc($tag) ."] ";
     
-    my $buffer = " "x$level;
-    
-    unless( exists $param{ -lv } ) {
+    unless( exists $param{ -id } ) {
+
+	print $foo;
+	print "$val\n";
+
+    } elsif( $id == 0 ) {
+	print "$foo" . '-' x 40 . "\n$foo";
 	
-	print "$tag" . '-' x 40 . "\n$tag";
+	print "$val\n";
 	
-	print "$txt\n";
+	print "$foo" . '-' x 40 . "\n";
+	print "$foo\n";
 	
-	print "$tag" . '-' x 40 . "\n";
-	print "$tag\n";
-    } elsif( $level == 1 ) {
-	print $tag;
-	print "$txt\n";
+    } elsif( $id >= 1 ) {
 	
-    } else {
-	print $tag;
+	my $buffer = " "x $id;
 	
-	print "$buffer -> $param{ -txt }\n";
-    }
+	print $foo;	
+	print "$buffer -> $param{ -val }\n";
+    } 
     
 }
 
-sub counter {
-    
+sub merge_file {
+
 }
 
 1;
