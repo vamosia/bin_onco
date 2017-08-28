@@ -3,6 +3,7 @@ package Generic;
 use strict;
 use warnings;
 use Data::Dumper;
+use Term::ANSIColor;
  
 use Exporter qw(import);
  
@@ -17,16 +18,17 @@ sub new {
 
 sub read_file {
 
-    #my( $class, 
-    #	%param ) = @_;
     my %param = @_;
-
+    my $delim = $param{ -delim };
     my $header = 0;
-    my @header;
+    my @header; 
     my @data;
     
-    open( IN, "<$param{ -f }" );
+    open( IN, "<$param{ -file }" ) or die "$!\n";
 
+    $delim = "\\|" if( $delim eq "|" );
+    $delim = "\\," if( $delim eq "," );
+    
     while( <IN> ) {
 	
 	chomp $_;
@@ -34,56 +36,70 @@ sub read_file {
 	next if( $_ =~ /^#/ );
 	
 	if( $header == 0 ) {
-	    @header = split( /\t/, $_ );
+
+	    @header = split( /$delim/, $_ );
+
 	    $header++;
 	    next;
 	}
 
-	my @line = split( /\t/, $_ );
+	my @line = split( /$delim/, $_ );
 
 	my %line;
 
 	@line{ @header } = @line;
 
+	
 	push( @data, \%line );
     }
     
     close( IN );
-
-    return( \@header, \@data );
+    
+    return({ header => \@header, data => \@data });
 }
 
 sub pprint {
     
     my %param = @_;
     my $tag = $param{ -tag } || "INFO";
-    my $val = $param{ -val };
-    my $id = $param{ -id };
+    $tag = uc( $tag );
+
+    my $val = $param{ -val } || "";
+
+    my $level = $param{ -level } || 1;
+    $level = 1 unless( defined $param{ -level } );
+
     my $time  = `date`; chomp $time;
 
-    my $foo = "[$time] [" . uc($tag) ."] ";
-    
-    unless( exists $param{ -id } ) {
+    my $error = $tag =~ /error/i ? 1 : 0;
 
-	print $foo;
-	print "$val\n";
+    my $stamp = "[$time] [" . uc($tag) ."] ";
 
-    } elsif( $id == 0 ) {
-	print "$foo" . '-' x 40 . "\n$foo";
+    if( $level eq 0 ) {
+	print "$stamp" . '-' x 40 . "\n$stamp";
 	
 	print "$val\n";
 	
-	print "$foo" . '-' x 40 . "\n";
-	print "$foo\n";
+	print "$stamp" . '-' x 40 . "\n";
+	print "$stamp\n";
+
+    } elsif( $level == 1 ) {
+
+	print color('bold red') if( $error );
+	print $stamp;
+	print "$val\n";
+	print color('reset') if ( $error );
 	
-    } elsif( $id >= 1 ) {
+    } elsif( $level >= 1 ) {
 	
-	my $buffer = " "x $id;
+	my $buffer = " "x $level;
 	
-	print $foo;	
+	print $stamp;	
 	print "$buffer -> $param{ -val }\n";
     } 
     
+    exit if( $tag =~ /error/i );
+
 }
 
 sub merge_file {
