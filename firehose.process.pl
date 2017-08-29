@@ -12,7 +12,7 @@ my %options = ( -d => 0,
 		-s => 'TCGA (2016_01_28)' );
 
 GetOptions( "d=s"      => \$options{ -d },
-	    "v=s"      => \$options{ -v },
+	    "v"      => \$options{ -v },
 	    "s=s"      => \$options{ -s }
     ) or die "Incorrect Options $0!\n";
 
@@ -43,9 +43,10 @@ GetOptions( "d=s"      => \$options{ -d },
 # pc = patient_meta
 # ps = patient_study
 my %header = ( 'study'         => [qw(CANCER_STUDY SOURCE DESCRIPTION)],
+	       'cancer_study'  => [qw(CANCER_STUDY CANCER_ID)],
 	       'patient'       => [qw(BCR_PATIENT_BARCODE)],
 	       'patient_study' => [qw(BCR_PATIENT_BARCODE CANCER_STUDY)],
-	       'sample'        => [qw(BCR_PATIENT_BARCODE BCR_SAMPLE_BARCODE CANCER_ID)] 
+	       'sample'        => [qw(BCR_PATIENT_BARCODE BCR_SAMPLE_BARCODE CANCER_STUDY CANCER_ID)] 
     );
 
 
@@ -53,13 +54,20 @@ my %header_pm;
 my %header_sm;
 
 # cs = cancer_study
-my %data_cs;
-my @header_cs = qw(CANCER_STUDY SOURCE DESCRIPTION);
+my %data_s;
+my @header_s = qw(CANCER_STUDY SOURCE DESCRIPTION);
+
+pprint( -level => 0, -val => 'Processing Patient Sample Files' );
+
+pprint( -val => "Loading cancer mapping" );
 
 my $map = load_cancer_mapping();
 
-pprint( -val => 'Processing Patient Sample Files' );
+pprint( -val => "Processing Patient Samples" );
+
 my $data = process_patient_sample();
+
+pprint( -val => "Generating Output" );
 
 generate_output( $data );
 
@@ -117,17 +125,25 @@ sub generate_output {
     open( STUDY, ">data_study.txt" );
     print STUDY join( "\t", @{ $header{ study } } ) . "\n";
 
+    open( CANCER_STUDY, ">data_cancer_study.txt" );
+    print CANCER_STUDY join( "\t", @{ $header{ cancer_study } } ) . "\n";
+
     # revert back to lower case, since the values in the hash are all lower case
     $_ = lc for @header_pm;
     $_ = lc for @header_sm;
-    $_ = lc for @header_cs;
+    $_ = lc for @header_s;
     
     # id = UUID
+    my $uuid_cnt = 0;
+    
     foreach my $uuid ( keys %{ $data } ) {
-	   
+	
+	pprint( -val => "UUID : $uuid", -level => 1 ) if( $options{ -v } );
+	$uuid_cnt ++;
+	
 	my $pid = $data->{ $uuid }{ 'patient' }{ 'bcr_patient_barcode' };
 	my $cs = $data->{ $uuid }{ 'patient' }{ 'cancer_study' };
-	   
+	
 	# $cat = patient, sample, sample-2, sample-3
 	foreach my $cat ( sort keys %{ $data->{ $uuid } } ) { 
 	    
@@ -150,7 +166,7 @@ sub generate_output {
 		my $sid = $data->{ $uuid }{ $cat }{ 'bcr_sample_barcode' };
 		my $cid = $data->{ $uuid }{ $cat }{ 'cancer_id' };
 		
-		print SAMPLE "$pid\t$sid\t$cid\n";
+		print SAMPLE "$pid\t$sid\t$cs\t$cid\n";
 		
 		# Store the capitalised back to the hash
 		$data->{ $uuid }{ $cat }{ 'bcr_sample_barcode' } = $sid;
@@ -161,28 +177,38 @@ sub generate_output {
 		    push( @line, $data->{ $uuid }{ $cat }{ $id } );
 		}
 		
-		print SAMPLE_META "$pid\t" . join( "\t", @line ), "\n";						
+		print SAMPLE_META join( "\t", @line ), "\n";						
 	    }
 	}
-	
-	
-	
     }
-    # Print to STUDY (data_study.txt) file
-    my @line;
+
+    pprint( -level => 1, -val => "Total Samples = $uuid_cnt" ) if( $options{ -v } );
     
-    foreach my$cs ( keys %data_cs ) {
-	foreach my $id (@header_cs ) {
-	    push( @line, $data_cs{ $cs }{ $id } || 'NA' )		 
+    # Print to STUDY (data_study.txt) file
+    my @line_study;
+    my @line_cancer_study;
+
+    foreach my$cs ( keys %data_s ) {
+	foreach my $id (@header_s ) {
+	    push( @line_study, $data_s{ $cs }{ $id } || 'NA' )		 
+	}
+	
+	foreach my $id ( @{ $header{ cancer_study } } ) {
+
+	    push( @line_cancer_study, $data_s{ $cs }{ lc($id) } );
 	}
     }
-    print STUDY join( "\t", @line );
-    
+
+    print STUDY join( "\t", @line_study );
+    print CANCER_STUDY join( "\t", @line_cancer_study );
+
     close( PATIENT );
     close( PATIENT_META );
     close( SAMPLE );
     close( SAMPLE_META );
     close( STUDY );
+    close( CANCER_STUDY );
+
 }
 
 sub process_patient_sample {
@@ -191,7 +217,7 @@ sub process_patient_sample {
     
     # there should only be one file, if not error out
     pprint( id => 'error', -val => 'Multiple *.clin.merged.txt Found' ) if( $#files != 0 );
-    
+
     open( IN, "<$files[0]" ) or die "$!\n";					   
     
     my %data;
@@ -230,18 +256,19 @@ sub process_patient_sample {
 			       -data => \%data, 
 			       -line => \@cancer_study );
 		
-
+		
 		# ADD TO HASH : Cancer_Study
 		foreach( @disease_code ) {
-		    $data_cs{ $_ . "_tcga" }{ 'source' } = $options{ -s };
-		    $data_cs{ $_ . "_tcga" }{ 'description' } = $map->{ $_ }{ 'description' };
-		    $data_cs{ $_ . "_tcga" }{ 'cancer_study' } = $_ . "_tcga";
+		    $data_s{ $_ . "_tcga" }{ 'source' } = $options{ -s };
+		    $data_s{ $_ . "_tcga" }{ 'description' } = $map->{ $_ }{ 'description' };
+		    $data_s{ $_ . "_tcga" }{ 'cancer_study' } = $_ . "_tcga";
+		    $data_s{ $_ . "_tcga" }{ 'cancer_id' } = $_;
 
 		}
 
 		
 		# check to see if there are more than 1 cancer_study
-		my $cnt = scalar keys %data_cs;
+		my $cnt = scalar keys %data_s;
 		
 		pprint( -tag => 'error', -val => 'More that 1 Cancer Study Found' ) if( $cnt != 1 );
 		
@@ -305,7 +332,7 @@ sub process_patient_sample {
 			       -key => \@key,
 			       -data => \%data, 
 			       -line => \@cancer_id );
-			
+		
 		# Add the bcr_patient_barcode to the sample hash
 		store_to_data( -id0 => $header[2],
 			       -id1 => 'bcr_patient_barcode',
@@ -355,8 +382,11 @@ sub load_cancer_mapping {
     my %ret;
     my $dir = `echo \$DATAHUB`; chomp $dir;
 
-    open( IN, "<$dir/firehose/disease_code_to_cancer_id.txt" ) or die "$!\n";
+    my $file = "$dir/firehose/disease_code_to_cancer_id.txt";
 
+    open( IN, "<$file" ) or die "$!\n";
+
+    
     my $header = 0;
     my @header;
     while( <IN> ) {

@@ -66,33 +66,31 @@ sub pprint {
 
     my $val = $param{ -val } || "";
 
-    my $level = $param{ -level } || 1;
-    $level = 1 unless( defined $param{ -level } );
-
     my $time  = `date`; chomp $time;
 
     my $error = $tag =~ /error/i ? 1 : 0;
 
     my $stamp = "[$time] [" . uc($tag) ."] ";
-
-    if( $level eq 0 ) {
+    
+    if( ! exists $param{ -level } ) {
+	
+	print color('bold red') if( $error );
+	print $stamp;
+	print "$val\n";
+	print color('reset') if ( $error );
+	
+    } elsif( $param{ -level } == 0 ) {
 	print "$stamp" . '-' x 40 . "\n$stamp";
 	
 	print "$val\n";
 	
 	print "$stamp" . '-' x 40 . "\n";
 	print "$stamp\n";
-
-    } elsif( $level == 1 ) {
-
-	print color('bold red') if( $error );
-	print $stamp;
-	print "$val\n";
-	print color('reset') if ( $error );
 	
-    } elsif( $level >= 1 ) {
 	
-	my $buffer = " "x $level;
+    } else {
+	
+	my $buffer = " "x $param{ -level };
 	
 	print $stamp;	
 	print "$buffer -> $param{ -val }\n";
