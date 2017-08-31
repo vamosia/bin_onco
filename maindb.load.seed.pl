@@ -18,20 +18,22 @@ use Storable;
 
 my %options = ( -d => 0,
 		-it => 'one',
-		-db => 'maindb_dev' );
+		-db => 'maindb_dev',
+		-c => 1 );
 
 
 GetOptions( "d=s"      => \$options{ -d },
-	    "v=s"      => \$options{ -v },
+	    "v"      => \$options{ -v },
 	    "s=s"      => \$options{ -s },
-	    "it=s"     => \$options{ -it }
-	    
+	    "it=s"     => \$options{ -it },
+	    "c=i"      => \$options{ -c }	    
     ) or die "Incorrect Options $0!\n";
 
 # Establish connection to mainDB
 my $mainDB = new MainDB( -db => $options{ -db },
 			 -d  => $options{ -d },
-			 -it => $options{ -it } );
+			 -it => $options{ -it },
+			 -commit => $options{ -c } );
 
 my @seedDB = qw( cancer_type gene gene_alias );
 
@@ -43,7 +45,7 @@ pprint( -level => 0, -val => "Loading SeedDB to $options{ -db }" );
 
 foreach my $table( @seedDB ) {
     
-    pprint( -val => $table );
+    pprint( -val => "Importing $table" );
     
     # next unless( $table eq 'gene_alias' );
 
@@ -51,7 +53,8 @@ foreach my $table( @seedDB ) {
 		 -table => $table );
 }
 
-$mainDB->commit();
+# Commit & Disconnect
+$mainDB->close();
 
 #########################################################################################################
 # SUBROUTINE
@@ -65,14 +68,18 @@ sub import_file {
 			  -delim =>  "|" );
 
     my @header = @{ $data->{ header } };
+    my $cnt = 0;
     foreach( @{ $data->{ data } } ) {
-
+	
 	my($sql_insert, $sql_value) = $mainDB->generate_sql( -table => $param{ -table },
 							     -data => $_ );;
-    
+	
 	$mainDB->import_sql( -insert => $sql_insert,
 			     -value => $sql_value );
+	$cnt++;
+	print "$cnt\r" if( $options{ -v } );
     }
+    print "\n" if( $options{ -v } );
 }
 
 

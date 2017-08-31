@@ -42,26 +42,29 @@ GetOptions( "d=s"      => \$options{ -d },
 # p = patient
 # pc = patient_meta
 # ps = patient_study
-my %header = ( 'study'         => [qw(CANCER_STUDY SOURCE DESCRIPTION)],
-	       'cancer_study'  => [qw(CANCER_STUDY CANCER_ID)],
-	       'patient'       => [qw(BCR_PATIENT_BARCODE)],
-	       'patient_study' => [qw(BCR_PATIENT_BARCODE CANCER_STUDY)],
-	       'sample'        => [qw(BCR_PATIENT_BARCODE BCR_SAMPLE_BARCODE CANCER_STUDY CANCER_ID)] 
+my %map_key = ( 'cancer_study' => 'study_name',
+		'bcr_patient_barcode' => 'stable_patient_id',
+		'bcr_sample_barcode' => 'stable_sample_id' );
+
+
+my %header = ( 'study'         => [qw(STUDY_NAME SOURCE DESCRIPTION)],
+	       'cancer_study'  => [qw(STUDY_NAME CANCER_ID)],
+	       'patient'       => [qw(STABLE_PATIENT_ID)],
+	       'patient_study' => [qw(STABLE_PATIENT_ID STUDY_NAME)],
+	       'sample'        => [qw(STABLE_PATIENT_ID STABLE_SAMPLE_ID STUDY_NAME CANCER_ID)] 
     );
 
 
 my %header_pm;
 my %header_sm;
 
-# cs = cancer_study
+# cs = study_name
 my %data_s;
-my @header_s = qw(CANCER_STUDY SOURCE DESCRIPTION);
+my @header_s = qw(STUDY_NAME SOURCE DESCRIPTION);
 
 pprint( -level => 0, -val => 'Processing Patient Sample Files' );
 
-pprint( -val => "Loading cancer mapping" );
-
-my $map = load_cancer_mapping();
+my $map_cancer_id = load_cancer_id();
 
 pprint( -val => "Processing Patient Samples" );
 
@@ -84,24 +87,23 @@ sub generate_output {
     # print header as upper case
     $_ = uc for @header_pm;
     
-    # move BCR_PATIENT_BARCODE to the index 0;
+    # move STABLE_PATIENT_ID to the index 0;
     for( 0 ..$#header_pm ) {
-	if( $header_pm[$_] eq 'BCR_PATIENT_BARCODE' ) {
+	if( $header_pm[$_] eq 'STABLE_PATIENT_ID' ) {
 	    my $pid = splice @header_pm, $_, 1;
 	    unshift( @header_pm, $pid );
 	}
     }
-
-
+    
     $_ = uc for @header_sm;
-
-    # move BARCODE to the index 0;
+    
+    # move STABLE_*_ID to the index 0;
     for( 0 ..$#header_sm ) {
-	if( $header_sm[$_] eq 'BCR_SAMPLE_BARCODE' ) {
+	if( $header_sm[$_] eq 'STABLE_SAMPLE_ID' ) {
 	    my $pid = splice @header_sm, $_, 1;
 	    unshift( @header_sm, $pid );
 
-	} elsif( $header_sm[$_] eq 'BCR_PATIENT_BARCODE' ) {
+	} elsif( $header_sm[$_] eq 'STABLE_PATIENT_ID' ) {
 	    my $pid = splice @header_sm, $_, 1;
 	    unshift( @header_sm, $pid );
 	}
@@ -141,39 +143,44 @@ sub generate_output {
 	pprint( -val => "UUID : $uuid", -level => 1 ) if( $options{ -v } );
 	$uuid_cnt ++;
 	
-	my $pid = $data->{ $uuid }{ 'patient' }{ 'bcr_patient_barcode' };
-	my $cs = $data->{ $uuid }{ 'patient' }{ 'cancer_study' };
+	my $pid = $data->{ $uuid }{ 'patient' }{ 'stable_patient_id' };
+	my $sn = $data->{ $uuid }{ 'patient' }{ 'study_name' };
 	
 	# $cat = patient, sample, sample-2, sample-3
 	foreach my $cat ( sort keys %{ $data->{ $uuid } } ) { 
 	    
 	    if( $cat eq 'patient' ) {
 				
-		print PATIENT_STUDY "$pid\t$cs\n";
+		print PATIENT_STUDY "$pid\t$sn\n";
 		print PATIENT "$pid\n";
 		
 		my @line;
 		
 		foreach my $id ( @header_pm ) {
 		    
+		    $id = map_key( -id => $id );
+
 		    push( @line, $data->{ $uuid }{ $cat }{ $id } );
 		}
 		
 		print PATIENT_META join( "\t", @line ), "\n";
-
+		   
+		   
 	    } elsif( $cat =~ /^sample/ ) {
 		
-		my $sid = $data->{ $uuid }{ $cat }{ 'bcr_sample_barcode' };
+		my $sid = $data->{ $uuid }{ $cat }{ 'stable_sample_id' };
 		my $cid = $data->{ $uuid }{ $cat }{ 'cancer_id' };
-		
-		print SAMPLE "$pid\t$sid\t$cs\t$cid\n";
+
+		print SAMPLE "$pid\t$sid\t$sn\t$cid\n";
 		
 		# Store the capitalised back to the hash
-		$data->{ $uuid }{ $cat }{ 'bcr_sample_barcode' } = $sid;
+		$data->{ $uuid }{ $cat }{ 'stable_sample_id' } = $sid;
 		my @line;
 		
 		foreach my $id ( @header_sm ) {
 		    print Dumper "$id $data->{ $uuid }{ $cat }{ $id }" if ($options{ -d } );
+
+		    $id = map_key( -id => $id );
 		    push( @line, $data->{ $uuid }{ $cat }{ $id } );
 		}
 		
@@ -185,22 +192,24 @@ sub generate_output {
     pprint( -level => 1, -val => "Total Samples = $uuid_cnt" ) if( $options{ -v } );
     
     # Print to STUDY (data_study.txt) file
-    my @line_study;
-    my @line_cancer_study;
-
+    my @study_out;
+    my @cancer_study_out;
+    
     foreach my$cs ( keys %data_s ) {
 	foreach my $id (@header_s ) {
-	    push( @line_study, $data_s{ $cs }{ $id } || 'NA' )		 
+	    push( @study_out, $data_s{ $cs }{ $id } || 'NA' )		 
 	}
-	
-	foreach my $id ( @{ $header{ cancer_study } } ) {
 
-	    push( @line_cancer_study, $data_s{ $cs }{ lc($id) } );
+	foreach my $id ( @{ $header{ cancer_study } } ) {
+	    
+	    push( @cancer_study_out, $data_s{ $cs }{ lc($id) } );
 	}
+
     }
 
-    print STUDY join( "\t", @line_study );
-    print CANCER_STUDY join( "\t", @line_cancer_study );
+    print STUDY join( "\t", @study_out );
+    
+    print CANCER_STUDY join( "\t", @cancer_study_out );
 
     close( PATIENT );
     close( PATIENT_META );
@@ -209,6 +218,25 @@ sub generate_output {
     close( STUDY );
     close( CANCER_STUDY );
 
+}
+
+sub map_key {
+    
+    my (%param) = @_;
+
+    my $id = $param{ -id };
+    
+    my $ret = $id;
+    
+    if ( exists $map_key{ lc($id) } ) {
+	$ret = $map_key{ lc($id) };
+	
+    } elsif ( exists $map_key{ uc($id) } ) {
+	$ret = $map_key{ uc($id) } 
+    }
+    
+    return( $ret );
+    
 }
 
 sub process_patient_sample {
@@ -232,8 +260,14 @@ sub process_patient_sample {
 	my @line = split( /\t/ );
 
 	my @header = split( /\./, $line[0] );
-	
+
+	#admin.batch_number     304.62.0        313.56.0;
 	shift @line; # remove first index, this is stored in header
+
+	# Map the header as needed
+	foreach( 0 ..$#header ) {
+	    $header[$_] = map_key( -id => $header[$_] );
+	}
 
 	# Need to store disease code line, since we have not encountered the key yet
 	if( $header[0] eq 'admin' ) {
@@ -241,33 +275,34 @@ sub process_patient_sample {
 
 	    if( $header[1] eq 'file_uuid' ) {
 		@key = @line; # store the column key used in the data hash
-
-		# initialize
+		
+		# initialize UUID
 		$data{ $_ } = undef foreach( @key );
 
-		# add 'tcga' to the disaese code to make the cancer_study
-		my @cancer_study = @disease_code;
- 		$_ = "${_}_tcga" for @cancer_study;
+		# add 'tcga' to the disaese code to make the study_name
+		my @study_name = @disease_code;
 
-		# ADD TO HASH : the cancer_study tag to the patient hash
+ 		$_ = "${_}_tcga" for @study_name;
+		
+		# ADD TO HASH : the study_name tag to the patient hash
 		store_to_data( -id0 => 'patient',
-			       -id1 => 'cancer_study',
+			       -id1 => 'study_name',
 			       -key => \@key,
 			       -data => \%data, 
-			       -line => \@cancer_study );
+			       -line => \@study_name );
 		
 		
-		# ADD TO HASH : Cancer_Study
+		# ADD TO HASH : Study_Name
 		foreach( @disease_code ) {
 		    $data_s{ $_ . "_tcga" }{ 'source' } = $options{ -s };
-		    $data_s{ $_ . "_tcga" }{ 'description' } = $map->{ $_ }{ 'description' };
-		    $data_s{ $_ . "_tcga" }{ 'cancer_study' } = $_ . "_tcga";
+		    $data_s{ $_ . "_tcga" }{ 'description' } = $map_cancer_id->{ $_ }{ 'description' };
+		    $data_s{ $_ . "_tcga" }{ 'study_name' } = $_ . "_tcga";
 		    $data_s{ $_ . "_tcga" }{ 'cancer_id' } = $_;
 
 		}
 
 		
-		# check to see if there are more than 1 cancer_study
+		# check to see if there are more than 1 study_name
 		my $cnt = scalar keys %data_s;
 		
 		pprint( -tag => 'error', -val => 'More that 1 Cancer Study Found' ) if( $cnt != 1 );
@@ -281,11 +316,11 @@ sub process_patient_sample {
 	if( ($header[0] eq 'patient' && $#header == 1) ) {
 	    
 	    # Capitalize 
-	    if( $header[1] eq 'bcr_patient_barcode' ) {
+	    if( $header[1] eq 'stable_patient_id' ) {
 		$_ = uc for @line;
 	    }
 	    
-	    @patient_list = @line if( $header[1] eq 'bcr_patient_barcode' );
+	    @patient_list = @line if( $header[1] eq 'stable_patient_id' );
 	    
 	    store_to_data( -id0 => 'patient',
 			   -id1 => $header[1],
@@ -305,7 +340,7 @@ sub process_patient_sample {
 	} elsif( $header[1] =~ /^sample/ && $#header == 3 ) {
 
 	    # Capitalize 
-	    if( $header[3] eq 'bcr_sample_barcode' ) {
+	    if( $header[3] eq 'stable_sample_id' ) {
 		$_ = uc for @line;
 	    }
 	    
@@ -325,7 +360,7 @@ sub process_patient_sample {
 		# so we need to map it
 		
 		my @cancer_id = @disease_code;
-		$_ = $map->{ $_ }{ 'cancer_id' } for @cancer_id;
+		$_ = $map_cancer_id->{ $_ }{ 'cancer_id' } for @cancer_id;
 		
 		store_to_data( -id0 => $header[2],
 			       -id1 => 'cancer_id',
@@ -333,9 +368,9 @@ sub process_patient_sample {
 			       -data => \%data, 
 			       -line => \@cancer_id );
 		
-		# Add the bcr_patient_barcode to the sample hash
+		# Add the stable_patient_id to the sample hash
 		store_to_data( -id0 => $header[2],
-			       -id1 => 'bcr_patient_barcode',
+			       -id1 => 'stable_patient_id',
 			       -key => \@key,
 			       -data => \%data, 
 			       -line => \@patient_list );
@@ -377,15 +412,17 @@ sub store_to_data {
     }
 }
 
-sub load_cancer_mapping {
+sub load_cancer_id {
 
     my %ret;
+    
     my $dir = `echo \$DATAHUB`; chomp $dir;
 
     my $file = "$dir/firehose/disease_code_to_cancer_id.txt";
 
+    pprint( -val => "Loading cancer mapping\n" );
+    
     open( IN, "<$file" ) or die "$!\n";
-
     
     my $header = 0;
     my @header;
@@ -394,6 +431,8 @@ sub load_cancer_mapping {
 	
 	if( $header == 0 ) {
 	    @header = split( /\t/, $_ );
+	    
+	    $header[$_] = map_key( -id => $header[$_]) foreach( 0 .. $#header );
 	    $header++;
 	    next;
 	}
@@ -405,11 +444,10 @@ sub load_cancer_mapping {
 	my %line;
 	@line{ @header } = @l;
 
-	$ret{ $line{ cancer_study } } = \%line;
-	
-
+	$ret{ $line{ study_name } } = \%line;
 	
     }
+
     close( IN );
 
     return( \%ret );

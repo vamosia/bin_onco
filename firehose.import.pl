@@ -13,62 +13,86 @@ use MainDB;
 
 my %dbtable;
 my %dbpriority;
-my %options = ( -d => 0,
-		-db => 'maindb_dev',
-		-it => 'one' );
+my %options = ( -db => 'maindb_dev' );
 
-GetOptions( 'd=i'    => \$options{ -d },
-	    'v'      => \$options{ -v },
-	    'db=s'   => \$options{ -db },
-	    't=s'    => \$options{ -t },
-	    'it=s'   => \$options{ -it }         # INSERT TYPE
+
+
+GetOptions( 'd'        => \$options{ -d },
+	    'c'        => \$options{ -c },  
+	    'v'        => \$options{ -v },
+	    't=s'      => \$options{ -t },
+	    'im'       => \$options{ -im },         # insert many
+	    'db=s'     => \$options{ -db },
+	    'dbs=s'    => \$options{ -schema }
     ) or die "Incorrect Options $0!\n";
 
 
-my $mainDB = new MainDB( -db => $options{ -db },
-			 -d  => $options{ -d },
-			 -it => $options{ -it } );
+my %seed_table = ( 'cancer_type' => '',
+		   'gene' => '',
+		   'gene_alias' => '' );
+my $debug = $options{ -d };
+
+my $gen = new Generic( %options );
+
+my $mainDB = new MainDB( %options );
 
 my %sql;
-my %map_column = ( 'BCR_PATIENT_BARCODE' => 'STABLE_ID',
-		   'BCR_SAMPLE_BARCODE' => 'STABLE_ID',
-		   'CANCER_STUDY' => 'NAME' );
 
 #my $dbh = DBI->connect("dbi:Pg:dbname=$db;host=localhost;port=5432",'postgres','ionadmin',{AutoCommit=>0,RaiseError=>1,PrintError=>0});
 # 0. Load required tables
 
-pprint( -val => 'Loading DB tables' );
+$gen->pprint( -level => 0,
+	      -val => "FIREHOSE IMPORT" );
+
+# Load the database structure
 $mainDB->load_dbtable();
 
-pprint( -val => 'Loading DB Priority' );
+# Load the priority of tables we should import
 $mainDB->load_dbpriority();
 
-pprint( -id => 0, -val => 'Start Importing File' );
+$gen->pprint( -val => 'Start Importing File' );
+
+# Get the list of tables to import, we are going to iterate through this
+# looking for file with the following symtax 'data_$table_.txt'
 
 my $dbpriority = $mainDB->get_dbpriority();
 
+# Load data based on its priority
 foreach( sort { $a <=> $b } keys %{ $dbpriority } ) {
-    
+        
     %sql = ();
     
     my $table = $dbpriority->{ $_ };
     
-    my $file =  "data_${table}.txt";
-    
-    next if( exists $options{ -t } && $table ne $options{ -t } );
-    
-    # Check file (but skip meta, as meta file does not exists (data_patient_meta.txt) it is contained in the original file (data_patient.txt)
-    unless( -e $file ) {
-	pprint( -level => 2, tag => 'WARNING', -val => "File does not exists : $file" );
+    # These are part of seedDB so skip importing
+    # as it will be imported by a different script maindb.load.seed.pl
+    if( exists $seed_table{ $table } ) {
+	$gen->pprint( -tag => 'IGNORE', 
+		      -val => "$table is part of seedDB" );
 	next;
     }
+    
+    my $file =  "data_${table}.txt";
 
-    pprint( -val => "Importing '$file' to '$table'" );
+    # $options{ -t } is used to import specific tables
+    next if( defined $options{ -t } && $table ne $options{ -t } );
+    
+    # if file does not exists
+    unless( -e $file ) {
+	$gen->pprint( -tag => 'WARNING',
+		      -level => 2, 
+		      -val => "File does not exists : $file" );
+	next;
+    }
+    
+    $gen->pprint( -level => 0, 
+		  -val => "Importing file from '$file' to table '$table'" );
     
     process_file( -t => $table,
 		  -f => $file );
-
 }
+
+# Commit & Disconnect
 
 $mainDB->close();
 
@@ -97,60 +121,48 @@ sub process_file {
 
     my $file = $param{ -f };
     my $table = $param{ -t };
-    my $meta = ($param{ -f } =~ /meta/) ? 1 : 0;
+
     
     open( IN, "<$file" ) or die "$!\n";
     my $header = 0;
     my @header;
+    my $cnt = 0;
     
     while( <IN> ) {
+
 	chomp $_;
 	
 	if( $header == 0 ) {
 	    @header = split( /\t/, $_ );
 
-	    
-	    for( 0 .. $#header ) {
-		my $column = $header[$_];
-
-		if( exists $map_column{ $column } ) {
-
-		    # Exception for sample table
-		    # this is because BCR_SAMPLE_BARCODE && BCR_PATIENT_BARCODE maps to the same value
-		    next if( $table eq 'sample' && $column =~ /BCR.*BARCODE/ );
-		    
-		    $header[$_ ] = $map_column{ $column }
-		}
-	    }
-	    
 	    $header = 1;
 	    
 	    next
 	}
 	
 	my @l = split( /\t/, $_ );
-	my %line;
-	@line{ @header } = @l;
+	my %data;
+	@data{ @header } = @l;
 	
 	# Create SQL
-	my ($sql_insert, $sql_value );
-	if( $meta ) {
-	    ($sql_insert, $sql_value) = $mainDB->generate_sql_meta( -table => $table,
-								    -data => \%line );
-	    
-	} else {
-	    ($sql_insert, $sql_value) = $mainDB->generate_sql( -table => $table,
-							       -data => \%line );
-	    
-	    
-	}	
+	my ($sql_insert, $sql_value) = $mainDB->generate_sql( -table => $table,
+							      -data => \%data );
+		
+#	$gen->pprint( -tag => 'SQL',
+#		      -level => 1, 
+#		      -val => "$sql_insert \n $sql_value\n" );
 
 	$mainDB->import_sql( -insert => $sql_insert,
 			     -value => $sql_value );
-	
+
+	# Counter
+	$cnt++;
+	print "$cnt\r" if( $options{ -v } )
     }
     
-    $mainDB->import_many() if( $options{ -it } eq 'many' );
+    print "\n" if( $options{ -v } );
+   
+    $mainDB->import_many() if( defined $options{ -im } );
 
     close( IN );
 }
@@ -161,9 +173,8 @@ sub test_connection {
     my $stmt = qq(SELECT * FROM maindb.cancer_type );
     my $sth = $dbh->prepare( $stmt );
     my $rv = $sth->execute() or die $DBI::errstr;
-    if($rv < 0) {
-	print $DBI::errstr;
-    }
+
+    print $DBI::errstr if($rv < 0);
     #while(my @row = $sth->fetchrow_array()) {
     #print Dumper \@row;
     #    }
@@ -174,50 +185,3 @@ sub test_connection {
 
 
 __END__
-
-sub import_sql {
-    
-    my (%param) = @_;
-    
-    my $sql_insert = $param{ -insert };
-    my $sql_value = $param{ -value };
-    
-    my $stmt = $param{ -stmt } || $sql_insert . $sql_value;
-
-    pprint( -level => 2, -tag => 'sql', -val => $stmt ) if( $options{ -d } );
-
-    my $rv;
-    
-    if( $options{ -it } eq 'one' ) {
-	# Insert one by one
-	$rv = $dbh->do($stmt) or die $DBI::errstr;	
-	
-    } elsif( $options{ -it } eq 'many' ) {
-
-	unless( exists $sql{ insert } ) {
-	    $sql{ insert } = $sql_insert;
-	}
-	
-	# Insert many at once
-	push( @{ $sql{ value } }, $sql_value );
-	
-    } else {
-	pprint( -tag => 'error', -val => 'Insert Type not Valid' );
-    }
-}
-
-sub import_many {
-    
-    my $sql_insert = $sql{ 'insert' };
-    my @sql_value = @{ $sql{ 'value' } };
-    
-    my $val = join( ",", @sql_value );
-    my $stmt = "$sql_insert $val";
-
-    # pprint( -val => "$stmt" ) if( $options{ -d } == 2 );
-    
-    #my $rv = $dbh->do($stmt) or die $DBI::errstr;
-    my $rv = $dbh->do($stmt) or die $dbh->rollback();
-    
-}
-
