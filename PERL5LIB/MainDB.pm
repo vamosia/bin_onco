@@ -49,7 +49,8 @@ sub load_dbpriority {
     
     my( $class, %param ) = @_;
 
-    $gen->pprint( -val => 'Loading DB Priority' );
+    $gen->pprint( -val => 'Loading DB Priority',
+		  -v => 1);
     
     my $file = `echo \$DATAHUB/firehose/table.priority.csv`; chomp $file;
 
@@ -88,7 +89,8 @@ sub load_dbtable {
 
     my( $class, %param) = @_;
 
-    $gen->pprint( -val => 'Loading DB tables' );
+    $gen->pprint( -val => 'Loading DB tables',
+		  -v => 1 );
     
     my $file = `echo \$DATAHUB/firehose/table.column.csv`; chomp $file;
     
@@ -145,7 +147,6 @@ sub import_sql {
 		  -d => 1 );
     
     my $rv;
-
     
     if( defined $options{ -im } ) {
 	
@@ -269,18 +270,17 @@ sub generate_sql {
 			  -val => "Skipping $table.$col => pk_auto",
 			  -d => 1 );
 
-	    check_uniq( $class,
-			-data => $data,
-			-key_stat => $key_stat );
 	    
 	    next;
 	    
 	# Get the query to extract the forein_key 
 	} elsif( $key_stat->{ key } eq 'fk' ) {
-    
+
+	    
 	    $val = get_fk_sql( $class,
 			       -data => $data, 
 			       %{ $key_stat } );
+	    
 	    
 	    $gen->pprint( -tag => 'GENERATE_SQL FK', 
 			  -level => 2, 
@@ -291,7 +291,7 @@ sub generate_sql {
 	    # There should only be 1 fk for meta_ table
 	    $meta_fk = $val; 
 	    
-	}  else {
+	}  elsif( $meta == 0 ) {
 	    
 	    # some of the columns need to be map, so extract the data key from a function
 	    $val = get_val( -table => $table,
@@ -302,8 +302,9 @@ sub generate_sql {
 			  -level => 2,
 			  -val => " TABLE: $table | COL: $col = VAL: $val\n",
 			  -d => 1 );
+	    
 	}
-
+	
 	if( $meta == 0 ) {
 	    push( @values, $val );
 	    push( @columns, $col );
@@ -448,6 +449,74 @@ sub close {
     $dbh->disconnect();
 }
 
+# Chekc if the pk already exists
+# 0 = no
+# 1 = yes
+sub pk_exists {
+    
+    my( $class,
+	%param ) = @_;
+    
+    my $table = $param{ -table };
+    my $data = $param{ -data };
+    my $ret = 0;
+    
+    foreach my $col ( sort keys %{ $dbtable{ $table } } ) {
+	
+	my $key_stat = get_key_status( $class,
+				       -table => $table,
+				       -column => $col );
+	
+	# check for uniqness will be ased on the pk_uniq
+	if ( $key_stat->{ key } eq 'pk' &&
+	     $key_stat->{ pk_uniq } ne 'NA' &&
+	     $key_stat->{ pk_auto } eq 'auto' ) {
+	    
+	    my $pk_uniq = uc( $key_stat->{ pk_uniq } );
+	    
+	    # Construct query	    
+	    my $query = sprintf( "SELECT %s FROM %s WHERE %s", 
+				 $key_stat->{ column },
+				 $key_stat->{ table } );
+				 
+	    my @line = split( /\|/, $pk_uniq );
+	    
+	    my @search;
+	    foreach (@line) {
+		push( @search, "$_ = $data->{ $_ }" );
+		
+	    }
+	    print Dumper $data;exit;
+	    print Dumper \@search;
+		
+	    my $id = uc( $key_stat->{ column } );
+	    
+	    
+	    my $stmt = get_ref_sql( $class,
+				    -id => $id,
+				    -data => $param{ -data } );
+		    
+	    my $sth = $dbh->prepare( $stmt );
+	    
+	    my $rv = $sth->execute() or die $DBI::errstr;
+	    
+		    # 0E0 means does not return anything
+	    $ret = $rv eq '0E0' ? 0 : 1;
+	    
+	    $gen->pprint( -tag => 'PK_EXISTS',
+			  -level => 1,
+				  -val => "$table : $param{ -data }->{ $pk_uniq } : $ret -> SKIPPING",
+			  -v => 1 ) if( $ret );
+	}
+    }
+    
+    
+    return( $ret );
+}
+1;
+
+__END__
+
 # Check for uniqness of a key
 # we don't want to for example, insert the same STABLE_SAMPLE_ID, twice in the sample table
 sub check_uniq {
@@ -471,20 +540,12 @@ sub check_uniq {
 	my $rv = $sth->execute() or die $DBI::errstr;
 	print Dumper $rv;
 
+	
 	# 0E0 means does not return anything
-	if( $rv ne '0E0' ) {
-	    $ret = 0;
-		
-	} elsif( $rv != 1 ) {
-	    # this should not exists. if its more that 1 that means
-	    # there are more than 1 entry for the same stable_id
-	    # throw and eror
-	    $gen->pprint( -tag => 'ERROR',
-			   -val => "More than 1 entry exists for $id" );
-	    
-	}
+	$ret = $rv eq '0E0' ? 0 : 1;
     }
     
+    return( $ret );
 }
 
 sub check_existance {

@@ -50,7 +50,8 @@ $mainDB->load_dbtable();
 # Load the priority of tables we should import
 $mainDB->load_dbpriority();
 
-$gen->pprint( -val => 'Start Importing File' );
+$gen->pprint( -val => 'Start Importing File',
+	      -v => 1 );
 
 # Get the list of tables to import, we are going to iterate through this
 # looking for file with the following symtax 'data_$table_.txt'
@@ -59,7 +60,7 @@ my $dbpriority = $mainDB->get_dbpriority();
 
 # Load data based on its priority
 foreach( sort { $a <=> $b } keys %{ $dbpriority } ) {
-        
+
     %sql = ();
     
     my $table = $dbpriority->{ $_ };
@@ -68,7 +69,8 @@ foreach( sort { $a <=> $b } keys %{ $dbpriority } ) {
     # as it will be imported by a different script maindb.load.seed.pl
     if( exists $seed_table{ $table } ) {
 	$gen->pprint( -tag => 'IGNORE', 
-		      -val => "$table is part of seedDB" );
+		      -val => "$table is part of seedDB",
+		      -v => 1 );
 	next;
     }
     
@@ -130,8 +132,13 @@ sub process_file {
     
     while( <IN> ) {
 
-	chomp $_;
+	$cnt++;
+
+	$gen->pprint( -tag => "LINE $cnt",
+		      -d => 1 );
 	
+	chomp $_;
+
 	if( $header == 0 ) {
 	    @header = split( /\t/, $_ );
 
@@ -140,23 +147,35 @@ sub process_file {
 	    next
 	}
 	
+	
 	my @l = split( /\t/, $_ );
 	my %data;
 	@data{ @header } = @l;
+
 	
+
 	# Create SQL
 	my ($sql_insert, $sql_value) = $mainDB->generate_sql( -table => $table,
 							      -data => \%data );
-		
-#	$gen->pprint( -tag => 'SQL',
-#		      -level => 1, 
-#		      -val => "$sql_insert \n $sql_value\n" );
+	print Dumper $sql_insert;
+	print Dumper $sql_value;
+	exit;
+
+	# Check uniqness
+	my $pk_exists = $mainDB->pk_exists( -table => $table,
+					    -data => \%data );
+	
+	next if( $pk_exists );
+	
+	$gen->pprint( -tag => 'SQL',
+		      -level => 1, 
+		      -val => "$sql_insert \n $sql_value\n",
+		      -d => 1 );
 
 	$mainDB->import_sql( -insert => $sql_insert,
 			     -value => $sql_value );
 
 	# Counter
-	$cnt++;
 	print "$cnt\r" if( $options{ -v } )
     }
     
