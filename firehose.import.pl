@@ -5,18 +5,48 @@ use warnings;
 
 use DBI;
 use Data::Dumper;
-use Generic qw(pprint read_file);
+use Generic;
 use Getopt::Long;
 use Storable;
 use MainDB;
+use POSIX;
+
+
+( $#ARGV > -1 ) || die "
+
+DESCRIPTION:
+     Loads the static portion of the mainDB database. Data is loaded from the files at the current directory.
+     Please ensure that these are present on the current directory
+
+     -data_cancer_type.txt
+     -data_gene.txt
+     -data_gene_alias.txt
+    
+USAGE:
+     maindb.load.seed.pl
+
+EXAMPLE:
+     maindb.load.seed.pl -d test -c
+
+OPTIONS :
+     -db    Database. This is db that we're inserting to
+     -d     Debug Mode
+     -v     Verbose
+
+     Database Operation
+     -c     Commit Insert Statement (Default rollback)
+     -im    Insert many (Default one-by-one insert)
+   
+AUTHOR:
+    Alexander Butarbutar (ab\@oncodna.com), OncoDNA
+\n\n";
 
 
 my %dbtable;
 my %dbpriority;
+
+# Get User Options
 my %options = ( -db => 'maindb_dev' );
-
-
-
 GetOptions( 'd'        => \$options{ -d },
 	    'c'        => \$options{ -c },  
 	    'v'        => \$options{ -v },
@@ -30,16 +60,12 @@ GetOptions( 'd'        => \$options{ -d },
 my %seed_table = ( 'cancer_type' => '',
 		   'gene' => '',
 		   'gene_alias' => '' );
-my $debug = $options{ -d };
 
 my $gen = new Generic( %options );
 
 my $mainDB = new MainDB( %options );
 
 my %sql;
-
-#my $dbh = DBI->connect("dbi:Pg:dbname=$db;host=localhost;port=5432",'postgres','ionadmin',{AutoCommit=>0,RaiseError=>1,PrintError=>0});
-# 0. Load required tables
 
 $gen->pprint( -level => 0,
 	      -val => "FIREHOSE IMPORT" );
@@ -95,27 +121,22 @@ foreach( sort { $a <=> $b } keys %{ $dbpriority } ) {
 }
 
 # Commit & Disconnect
-
 $mainDB->close();
-
-# 1. Load data_cancer_study.txt
-
-# 3. Load data_patient_clinical.txt
-
-# 4. Load data_sample.txt;
-
-# 5. Load_data_sample_clinical.txt
-
-# 2. Load Mutation
-# Directory = stddata__2016_01_28/ACC/20160128/*ACC.Mutation_Packager_Oncotated_Calls.Level_3*
-    
-# 3. Load GISTIC2
-# Directory = analyses__2016_01_28//ACC/20160128/
 
 
 ############################################################
 # SUBROUTINE
+############################################################
 
+=head2 process_file
+
+    Function : Process and import the FILENAME into the database on TABLENAME
+    Usage    : process_file( -f => FILE_NAME,
+                             -t => TABLE_NAME )                           
+    Returns  : none
+    Args     : -f  File name to be process
+               -t  The table name where this file will be imported to
+=cut
 
 sub process_file {
     
@@ -124,82 +145,90 @@ sub process_file {
     my $file = $param{ -f };
     my $table = $param{ -t };
 
+    my $total = `more $file | wc -l`; chomp $total;
     
     open( IN, "<$file" ) or die "$!\n";
+
     my $header = 0;
     my @header;
-    my $cnt = 0;
-    
+
+    # Read the file and process each line
     while( <IN> ) {
 
-	$cnt++;
-
-	$gen->pprint( -tag => "LINE $cnt",
-		      -d => 1 );
-	
 	chomp $_;
 
+	# Store the header into its own array
 	if( $header == 0 ) {
 	    @header = split( /\t/, $_ );
 
 	    $header = 1;
-	    
+
 	    next
 	}
 	
-	
+	# Create a hash table with the @header as the key and each (split) column as the @value
 	my @l = split( /\t/, $_ );
 	my %data;
 	@data{ @header } = @l;
 
+#	# If value doesn't exists set it to null
+#	foreach (keys %data ) {
+#	    $data{ $_ } = 'NULL' if( $data{ $_ } eq '');
+#	}
 	
-
 	# Create SQL
-	my ($sql_insert, $sql_value) = $mainDB->generate_sql( -table => $table,
-							      -data => \%data );
-	print Dumper $sql_insert;
-	print Dumper $sql_value;
-	exit;
-
-	# Check uniqness
-	my $pk_exists = $mainDB->pk_exists( -table => $table,
-					    -data => \%data );
+	my ($sql_insert, 
+	    $sql_value,
+	    $constraint) = $mainDB->generate_sql( -table => $table,
+						  -data => \%data );
 	
-	next if( $pk_exists );
+	# Insert SQL statement to the database
+	$mainDB->execute_sql( -insert => $sql_insert,
+			      -value => $sql_value,
+			      -constraint => $constraint );
 	
-	$gen->pprint( -tag => 'SQL',
-		      -level => 1, 
-		      -val => "$sql_insert \n $sql_value\n",
-		      -d => 1 );
-
-	$mainDB->import_sql( -insert => $sql_insert,
-			     -value => $sql_value );
-
 	# Counter
-	print "$cnt\r" if( $options{ -v } )
+	$gen->pprogres( -total => $total,
+			-v => 1 );
     }
     
     print "\n" if( $options{ -v } );
-   
-    $mainDB->import_many() if( defined $options{ -im } );
+
+    # Allows importing of SQL statement many at once, instead of one by one
+    # this is currently deprecated
+    # $mainDB->import_many() if( defined $options{ -im } );
 
     close( IN );
 }
 
+=head2 test_connection
 
+    Function : Basic check to test connection to a database
+    Usage    : test_connection()
+    Returns  : none
+    Args     : none
+
+
+=cut
 sub test_connection {
+    
     my $dbh = DBI->connect("dbi:Pg:dbname=postgres;host=localhost;port=5432",'postgres','ionadmin',{AutoCommit=>1,RaiseError=>1,PrintError=>0});
+    
     my $stmt = qq(SELECT * FROM maindb.cancer_type );
+    
     my $sth = $dbh->prepare( $stmt );
+    
     my $rv = $sth->execute() or die $DBI::errstr;
 
     print $DBI::errstr if($rv < 0);
-    #while(my @row = $sth->fetchrow_array()) {
-    #print Dumper \@row;
-    #    }
-    print "Operation done successfully\n";
-    $dbh->disconnect();
     
+    while(my @row = $sth->fetchrow_array()) {
+	print Dumper \@row;
+    }
+    
+    print "Operation done successfully\n";
+    
+    $dbh->disconnect();
 }
 
 

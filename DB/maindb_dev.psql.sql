@@ -44,6 +44,17 @@ CREATE SEQUENCE public.study_id_seq
 ALTER TABLE public.study_id_seq
   OWNER TO postgres;
 
+-- patient_id_seq
+CREATE SEQUENCE public.cancer_study_id_seq
+  INCREMENT 1
+  MINVALUE 1
+  MAXVALUE 9223372036854775807
+  START 1
+  CACHE 1;
+ALTER TABLE public.cancer_study_id_seq
+  OWNER TO postgres;
+
+
 -- patient_event_id_seq
 CREATE SEQUENCE public.patient_event_id_seq
   INCREMENT 1
@@ -136,7 +147,7 @@ CREATE TABLE IF NOT EXISTS public.study_meta (
   study_id INT NOT NULL,
   attr_id VARCHAR(255) NOT NULL,
   attr_value VARCHAR(255) NOT NULL,
-  PRIMARY KEY (study_id),
+  PRIMARY KEY (study_id, attr_id),
   CONSTRAINT fk_study_id
     FOREIGN KEY (study_id)
     REFERENCES public.study (study_id)
@@ -173,7 +184,7 @@ CREATE TABLE IF NOT EXISTS public.patient_meta (
   patient_id INT NOT NULL,
   attr_id VARCHAR(255) NOT NULL,
   attr_value VARCHAR(255) NOT NULL,
-  PRIMARY KEY (patient_id),
+  PRIMARY KEY (patient_id, attr_id),
   CONSTRAINT fk_patient_id
     FOREIGN KEY (patient_id)
     REFERENCES public.patient (patient_id)
@@ -201,14 +212,14 @@ ALTER TABLE public.gene
 
 CREATE TABLE IF NOT EXISTS public.variant (
   variant_id INT NOT NULL DEFAULT nextval('variant_id_seq'::regclass),
-  VarKey VARCHAR(255) NOT NULL,
+  varkey VARCHAR(255) NOT NULL,
   entrez_gene_id INT NOT NULL,
   chr VARCHAR(5) NOT NULL,
   start_position BIGINT NOT NULL,
   end_position BIGINT NOT NULL,
   ref_allele VARCHAR(400) NULL,
   var_allele VARCHAR(400) NULL,
-  ref_genome_build VARCHAR(45) NOT NULL,
+  genome_build VARCHAR(45) NOT NULL,
   strand VARCHAR(2) NULL,
   PRIMARY KEY (variant_id),
   CONSTRAINT fk_entrez_gene_id
@@ -218,8 +229,8 @@ CREATE TABLE IF NOT EXISTS public.variant (
     ON UPDATE NO ACTION);
 
 ALTER TABLE public.variant
-  ADD CONSTRAINT variant_uniq UNIQUE(VarKey, entrez_gene_id,
-  chr, start_position, end_position, ref_genome_build, strand);
+  ADD CONSTRAINT variant_uniq UNIQUE(varkey, entrez_gene_id,
+  chr, start_position, end_position, genome_build, strand);
 
 -- -----------------------------------------------------
 -- Table public.cancer_type
@@ -266,7 +277,7 @@ CREATE TABLE IF NOT EXISTS public.sample_meta (
   sample_id INT NOT NULL,
   attr_id VARCHAR(255) NOT NULL,
   attr_value VARCHAR(255) NOT NULL,
-  PRIMARY KEY (sample_id),
+  PRIMARY KEY (sample_id, attr_id),
   CONSTRAINT fk_sample_id
     FOREIGN KEY (sample_id)
     REFERENCES public.sample (sample_id)
@@ -298,6 +309,7 @@ ALTER TABLE public.patient_event
   ADD CONSTRAINT patient_event_uniq UNIQUE(patient_id, event_name,
   start_date, end_date);
 
+
 -- -----------------------------------------------------
 -- Table public.variant_meta
 -- -----------------------------------------------------
@@ -305,8 +317,8 @@ ALTER TABLE public.patient_event
 CREATE TABLE IF NOT EXISTS public.variant_meta (
   variant_id INT NOT NULL,
   attr_id VARCHAR(255) NOT NULL,
-  attr_value VARCHAR(255) NOT NULL,
-  PRIMARY KEY (variant_id),
+  attr_value TEXT NOT NULL,
+  PRIMARY KEY (variant_id, attr_id),
   CONSTRAINT fk_variant_id
     FOREIGN KEY (variant_id)
     REFERENCES public.variant (variant_id)
@@ -358,8 +370,8 @@ CREATE TABLE IF NOT EXISTS public.meta_list (
 CREATE TABLE IF NOT EXISTS public.patient_event_meta (
   event_id INT NOT NULL,
   attr_id VARCHAR(255) NOT NULL,
-  attr_value VARCHAR(255) NOT NULL,
-  PRIMARY KEY (event_id),
+  attr_value TEXT NOT NULL,
+  PRIMARY KEY (event_id, attr_id),
   CONSTRAINT fk_event_id
     FOREIGN KEY (event_id)
     REFERENCES public.patient_event (event_id)
@@ -392,7 +404,7 @@ ALTER TABLE public.gene_meta
 -- -----------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS public.cancer_study (
-  cancer_study_id INT NOT NULL,
+   cancer_study_id INT NOT NULL DEFAULT nextval('cancer_study_id_seq'::regclass),
   study_id INT NOT NULL,
   cancer_id VARCHAR(45) NOT NULL,
   PRIMARY KEY (cancer_study_id),
@@ -434,7 +446,7 @@ CREATE TABLE IF NOT EXISTS public.cnv_meta (
   cnv_id INT NOT NULL,
   attr_id VARCHAR(255) NOT NULL,
   attr_value VARCHAR(255) NOT NULL,
-  PRIMARY KEY (cnv_id),
+  PRIMARY KEY (cnv_id, attr_id),
   CONSTRAINT fk_cnv_id
     FOREIGN KEY (cnv_id)
     REFERENCES public.cnv (cnv_id)
@@ -572,7 +584,7 @@ CREATE TABLE IF NOT EXISTS public.variant_sample_meta (
   variant_sample_id INT NOT NULL,
   attr_id VARCHAR(255) NOT NULL,
   attr_value VARCHAR(255) NOT NULL,
-  PRIMARY KEY (variant_sample_id),
+  PRIMARY KEY (variant_sample_id, attr_id),
   CONSTRAINT fk_variant_sample_id
     FOREIGN KEY (variant_sample_id)
     REFERENCES public.variant_sample (variant_sample_id)
@@ -592,7 +604,7 @@ CREATE TABLE IF NOT EXISTS public.cnv_sample_meta (
   cnv_sample_id INT NOT NULL,
   attr_id VARCHAR(255) NOT NULL,
   attr_value VARCHAR(255) NOT NULL,
-  PRIMARY KEY (cnv_sample_id),
+  PRIMARY KEY (cnv_sample_id, attr_id),
   CONSTRAINT fk_cnv_sample_id
     FOREIGN KEY (cnv_sample_id)
     REFERENCES public.cnv_sample (cnv_sample_id)
@@ -635,8 +647,8 @@ CREATE TABLE IF NOT EXISTS public.analysis_data (
   analysis_id INT NOT NULL,
   entrez_gene_id INT NULL,
   attr_id VARCHAR(255) NOT NULL,
-  attr_value VARCHAR(255) NOT NULL,
-  PRIMARY KEY (analysis_data_id),
+  attr_value TEXT NOT NULL,
+  PRIMARY KEY (analysis_data_id, attr_id, entrez_gene_id),
   CONSTRAINT fk_entrez_gene_id
     FOREIGN KEY (entrez_gene_id)
     REFERENCES public.gene (entrez_gene_id)
@@ -656,9 +668,9 @@ ALTER TABLE public.analysis_data
 
 CREATE TABLE IF NOT EXISTS public.analysis_meta (
   analysis_id INT NOT NULL,
-  attr_id VARCHAR(45) NOT NULL,
-  attr_value VARCHAR(45) NULL,
-  PRIMARY KEY (analysis_id),
+  attr_id VARCHAR(255) NOT NULL,
+  attr_value TEXT NULL,
+  PRIMARY KEY (analysis_id, attr_id),
   CONSTRAINT fk_analysis_id
     FOREIGN KEY (analysis_id)
     REFERENCES public.analysis (analysis_id)

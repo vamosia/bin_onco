@@ -4,10 +4,12 @@ use strict;
 use warnings;
 use Data::Dumper;
 use Term::ANSIColor;
+use POSIX;
 # use Exporter qw(import);
 # our @EXPORT_OK = qw(read_file pprint);
 
 my %options;
+my $p_cnt;
 
 sub new {
     my ($class,
@@ -16,7 +18,11 @@ sub new {
     %options = %param;
     
     my $self = {};
+
+    $p_cnt = 1;
+    
     bless $self, $class;
+
     return $self;
 }
 
@@ -76,8 +82,6 @@ sub pprint {
     
     # Do nothing
     return() if( defined $param{ -d } && ! defined $options{ -d } );
-
-	
     return() if( defined $param{ -v } && ! defined $options{ -v } );
     
     if( ! exists $param{ -level } ) {
@@ -94,17 +98,38 @@ sub pprint {
 	print "$stamp" . '-' x 40 . "\n";
 	print "$stamp\n";
 	
-	
-    } else {
-
-	my $buffer = " "x $param{ -level };
+    } elsif( $param{ -level } == 1 ) {
 	print $stamp;	
-	print "$buffer -> $param{ -val }\n";
+	print " -> $param{ -val }\n";
+
+    } else {
+	
+	my $buffer = " "x ($param{ -level } * 2);
+	print $stamp;	
+	print "$buffer-> $param{ -val }\n";
     } 
     
     exit if( $tag =~ /error/i );
     
 }
 
+sub pprogress_reset {
+    $p_cnt = 1;
+}
 
+sub pprogres {
+
+    my( $class,
+	%param ) = @_;
+	
+    # Do nothing
+    return() if( defined $param{ -d } && ! defined $options{ -d } );
+    return() if( defined $param{ -v } && ! defined $options{ -v } );
+
+    my $total = $param{ -total };
+    
+    $p_cnt++;
+
+    printf "Processing.. %s/%s (%.1f%%)  \r", $p_cnt, $total, (($p_cnt/$total)*100);
+}
 1;

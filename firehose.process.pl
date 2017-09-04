@@ -4,14 +4,13 @@ use strict;
 use warnings;
 
 use Data::Dumper;
-use Generic qw(pprint);
+use Generic;
 use Getopt::Long;
 use Storable;
 
-my %options = ( -d => 0,
-		-s => 'TCGA (2016_01_28)' );
+my %options = ( -s => 'TCGA (2016_01_28)' );
 
-GetOptions( "d=s"      => \$options{ -d },
+GetOptions( "d"      => \$options{ -d },
 	    "v"      => \$options{ -v },
 	    "s=s"      => \$options{ -s }
     ) or die "Incorrect Options $0!\n";
@@ -41,7 +40,7 @@ GetOptions( "d=s"      => \$options{ -d },
 
 # p = patient
 # pc = patient_meta
-# ps = patient_study
+
 my %map_key = ( 'cancer_study' => 'study_name',
 		'bcr_patient_barcode' => 'stable_patient_id',
 		'bcr_sample_barcode' => 'stable_sample_id' );
@@ -49,11 +48,12 @@ my %map_key = ( 'cancer_study' => 'study_name',
 
 my %header = ( 'study'         => [qw(STUDY_NAME SOURCE DESCRIPTION)],
 	       'cancer_study'  => [qw(STUDY_NAME CANCER_ID)],
-	       'patient'       => [qw(STABLE_PATIENT_ID)],
-	       'patient_study' => [qw(STABLE_PATIENT_ID STUDY_NAME)],
-	       'sample'        => [qw(STABLE_PATIENT_ID STABLE_SAMPLE_ID STUDY_NAME CANCER_ID)] 
-    );
+	       'patient'       => [qw(STABLE_PATIENT_ID STUDY_NAME)],
+	       'sample'        => [qw(STABLE_PATIENT_ID STABLE_SAMPLE_ID STUDY_NAME CANCER_ID)] );
 
+my %header_meta;
+
+my $gen = new Generic( %options );
 
 my %header_pm;
 my %header_sm;
@@ -62,15 +62,15 @@ my %header_sm;
 my %data_s;
 my @header_s = qw(STUDY_NAME SOURCE DESCRIPTION);
 
-pprint( -level => 0, -val => 'Processing Patient Sample Files' );
+$gen->pprint( -level => 0, -val => 'Processing Patient Sample Files' );
 
 my $map_cancer_id = load_cancer_id();
 
-pprint( -val => "Processing Patient Samples" );
+$gen->pprint( -val => "Processing Patient Samples" );
 
 my $data = process_patient_sample();
 
-pprint( -val => "Generating Output" );
+$gen->pprint( -val => "Generating Output" );
 
 generate_output( $data );
 
@@ -81,8 +81,10 @@ sub generate_output {
 
     my $data = $_[0];
     
-    my @header_pm = sort keys %header_pm;
-    my @header_sm = sort keys %header_sm;
+    #my @header_pm = sort keys %header_pm;
+    #my @header_sm = sort keys %header_sm;
+    my @header_pm = sort keys %{ $header_meta{ patient } };
+    my @header_sm = sort keys %{ $header_meta{ sample } };
     
     # print header as upper case
     $_ = uc for @header_pm;
@@ -112,9 +114,6 @@ sub generate_output {
     open( PATIENT, ">data_patient.txt" );
     print PATIENT join( "\t", @{ $header{ patient } } ) . "\n";
 
-    open( PATIENT_STUDY, ">data_patient_study.txt" );
-    print PATIENT_STUDY join( "\t", @{ $header{ patient_study } } ) . "\n";
-
     open( PATIENT_META, ">data_patient_meta.txt" );
     print PATIENT_META join( "\t", @header_pm ) . "\n";
     
@@ -134,13 +133,17 @@ sub generate_output {
     $_ = lc for @header_pm;
     $_ = lc for @header_sm;
     $_ = lc for @header_s;
+
+
+    $header_meta{ patient } = \@header_pm;
+    $header_meta{ sample } = \@header_sm;
     
     # id = UUID
     my $uuid_cnt = 0;
     
     foreach my $uuid ( keys %{ $data } ) {
 	
-	pprint( -val => "UUID : $uuid", -level => 1 ) if( $options{ -v } );
+	$gen->pprint( -val => "UUID : $uuid", -level => 1 ) if( $options{ -v } );
 	$uuid_cnt ++;
 	
 	my $pid = $data->{ $uuid }{ 'patient' }{ 'stable_patient_id' };
@@ -150,36 +153,57 @@ sub generate_output {
 	foreach my $cat ( sort keys %{ $data->{ $uuid } } ) { 
 	    
 	    if( $cat eq 'patient' ) {
-				
-		print PATIENT_STUDY "$pid\t$sn\n";
-		print PATIENT "$pid\n";
-		
+
+		# Print to patient file
 		my @line;
 		
-		foreach my $id ( @header_pm ) {
-		    
-		    $id = map_key( -id => $id );
+		foreach my $id( @{ $header{ $cat } } ) {
+		    push( @line, $data->{ $uuid }{ $cat }{ lc($id) } );
+		}
+		print PATIENT join( "\t", @line ),"\n";
+		
 
+		# Print to patient_meta file
+		@line = ();
+		
+		#foreach my $id ( @header_pm ) {
+		foreach my $id( @{ $header_meta{ $cat } } ) {
+		    $id = map_key( -id => $id );
 		    push( @line, $data->{ $uuid }{ $cat }{ $id } );
+		    
 		}
 		
 		print PATIENT_META join( "\t", @line ), "\n";
-		   
-		   
+
+		# Store the study name into the sample hash
+		$data->{ $uuid }{ sample }{ study_name } = $data->{ $uuid }{ $cat }{ study_name };
 	    } elsif( $cat =~ /^sample/ ) {
-		
-		my $sid = $data->{ $uuid }{ $cat }{ 'stable_sample_id' };
-		my $cid = $data->{ $uuid }{ $cat }{ 'cancer_id' };
 
-		print SAMPLE "$pid\t$sid\t$sn\t$cid\n";
+		# Print to sample file
+		my @line;   
+
 		
-		# Store the capitalised back to the hash
-		$data->{ $uuid }{ $cat }{ 'stable_sample_id' } = $sid;
-		my @line;
+		# Always use the sample header for sample (not sample-2 or sample-3)
+		# This ensure consistencies among all the samples are not all sample (sample-2, sample-3)
+		# will have the same header
+		foreach my $id( @{ $header{ sample } } ) {
+
+		    $gen->pprint( -tag => 'SAMPLE',
+				  -val => "$id >>>> $data->{ $uuid }{ $cat }{ lc($id) }",
+				  -d => 1 );
+
+		    my $val = (defined $data->{ $uuid }{ $cat }{ lc($id) } ) ?
+			$data->{ $uuid }{ $cat }{ lc($id) } : 'NA';
+		    
+		    push( @line,  $val );
+		}
 		
+		print SAMPLE join( "\t", @line ),"\n";
+
+		# Print to sample_meta file
+		@line = ();
+
 		foreach my $id ( @header_sm ) {
-		    print Dumper "$id $data->{ $uuid }{ $cat }{ $id }" if ($options{ -d } );
-
 		    $id = map_key( -id => $id );
 		    push( @line, $data->{ $uuid }{ $cat }{ $id } );
 		}
@@ -189,7 +213,8 @@ sub generate_output {
 	}
     }
 
-    pprint( -level => 1, -val => "Total Samples = $uuid_cnt" ) if( $options{ -v } );
+    $gen->pprint( -level => 1, 
+		  -val => "Total Patient = $uuid_cnt" );
     
     # Print to STUDY (data_study.txt) file
     my @study_out;
@@ -197,7 +222,10 @@ sub generate_output {
     
     foreach my$cs ( keys %data_s ) {
 	foreach my $id (@header_s ) {
-	    push( @study_out, $data_s{ $cs }{ $id } || 'NA' )		 
+	    my $val = (defined $data_s{ $cs }{ $id }) ?
+		$data_s{ $cs }{ $id } : 'NA';
+	    
+	    push( @study_out, $val );
 	}
 
 	foreach my $id ( @{ $header{ cancer_study } } ) {
@@ -244,7 +272,7 @@ sub process_patient_sample {
     my @files = glob("*.clin.merged.txt");
     
     # there should only be one file, if not error out
-    pprint( id => 'error', -val => 'Multiple *.clin.merged.txt Found' ) if( $#files != 0 );
+    $gen->pprint( id => 'error', -val => 'Multiple *.clin.merged.txt Found' ) if( $#files != 0 );
 
     open( IN, "<$files[0]" ) or die "$!\n";					   
     
@@ -305,7 +333,7 @@ sub process_patient_sample {
 		# check to see if there are more than 1 study_name
 		my $cnt = scalar keys %data_s;
 		
-		pprint( -tag => 'error', -val => 'More that 1 Cancer Study Found' ) if( $cnt != 1 );
+		$gen->pprint( -tag => 'error', -val => 'More that 1 Cancer Study Found' ) if( $cnt != 1 );
 		
 	    }	    
 	}
@@ -384,7 +412,15 @@ sub process_patient_sample {
     }    
     
     close( IN );
-    print Dumper \%data if( $options{ -d } );
+    
+    # study_name is only added to patient hash, need to add this to everything else
+    foreach my $uuid ( keys %data ) {
+	foreach my $cat (keys %{ $data{ $uuid } } ) {
+	    next if( $cat eq 'patient' );
+	    $data{ $uuid }{ $cat }{ study_name } = $data{ $uuid }{ patient }{ study_name };
+	}
+    }
+
     return( \%data );
 }
 
@@ -405,8 +441,15 @@ sub store_to_data {
 	# store the header for meta columns
 	if( $id0 eq 'patient' ) {
 	    $header_pm{ $id1 } = undef;
+	    
 	} elsif ( $id0 eq 'sample' ) {
 	    $header_sm{ $id1 } = undef;
+	}
+	# id1 = patient or sample
+	if( $id0 =~ /^sample/ ) {
+	    $header_meta{ sample }{ $id1 } = undef;
+	} else {
+	    $header_meta{ $id0 }{ $id1 } = undef;
 	}
 	
     }
@@ -420,7 +463,7 @@ sub load_cancer_id {
 
     my $file = "$dir/firehose/disease_code_to_cancer_id.txt";
 
-    pprint( -val => "Loading cancer mapping\n" );
+    $gen->pprint( -val => "Loading cancer mapping\n" );
     
     open( IN, "<$file" ) or die "$!\n";
     
