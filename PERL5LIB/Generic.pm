@@ -19,7 +19,7 @@ sub new {
     
     my $self = {};
 
-    $p_cnt = 1;
+    $p_cnt = 0;
     
     bless $self, $class;
 
@@ -77,25 +77,25 @@ sub pprint {
     my $val = $param{ -val } || "";
     my $time  = `date`; chomp $time;
     my $tag = $param{ -tag } || "INFO";
-    my $error = $tag =~ /error/i ? 1 : 0;
+    my $red = ( $tag =~ /error/i || $tag =~ /warning/i ) ? 1 : 0;
     my $stamp = "[$time] [" . uc($tag) ."] ";
     
     # Do nothing
     return() if( defined $param{ -d } && ! defined $options{ -d } );
     return() if( defined $param{ -v } && ! defined $options{ -v } );
-    
+
+    print color('bold red') if( $red );
+
     if( ! exists $param{ -level } ) {
-	
-	print color('bold red') if( $error );
 	print $stamp;
 	print "$val\n";
-	print color('reset') if ( $error );
+	
 	
     } elsif( $param{ -level } == 0 ) {
 	print "$stamp\n";
-	print "$stamp" . '-' x 40 . "\n$stamp";
+	print "$stamp" . '-' x length($val) . "\n$stamp";
 	print "$val\n";
-	print "$stamp" . '-' x 40 . "\n";
+	print "$stamp" . '-' x length($val) . "\n";
 	print "$stamp\n";
 	
     } elsif( $param{ -level } == 1 ) {
@@ -108,13 +108,15 @@ sub pprint {
 	print $stamp;	
 	print "$buffer-> $param{ -val }\n";
     } 
-    
+
+    print color('reset') if ( $red );
+
     exit if( $tag =~ /error/i );
     
 }
 
 sub pprogress_reset {
-    $p_cnt = 1;
+    $p_cnt = 0;
 }
 
 sub pprogres {
@@ -129,7 +131,8 @@ sub pprogres {
     my $total = $param{ -total };
     
     $p_cnt++;
-
+   
     printf "Processing.. %s/%s (%.1f%%)  \r", $p_cnt, $total, (($p_cnt/$total)*100);
 }
+
 1;

@@ -94,14 +94,14 @@ foreach( sort { $a <=> $b } keys %{ $dbpriority } ) {
     # These are part of seedDB so skip importing
     # as it will be imported by a different script maindb.load.seed.pl
     if( exists $seed_table{ $table } ) {
-	$gen->pprint( -tag => 'IGNORE', 
-		      -val => "$table is part of seedDB",
-		      -v => 1 );
+	#$gen->pprint( -tag => 'IGNORE', 
+	#	      -val => "$table is part of seedDB",
+	#	      -v => 1 );
 	next;
     }
     
     my $file =  "data_${table}.txt";
-
+    
     # $options{ -t } is used to import specific tables
     next if( defined $options{ -t } && $table ne $options{ -t } );
     
@@ -144,6 +144,7 @@ sub process_file {
 
     my $file = $param{ -f };
     my $table = $param{ -t };
+    
 
     my $total = `more $file | wc -l`; chomp $total;
     
@@ -151,49 +152,80 @@ sub process_file {
 
     my $header = 0;
     my @header;
+    my %many_sql;
+    my @many_values;
 
+    # Get contrain
+    
     # Read the file and process each line
     while( <IN> ) {
-
+	
 	chomp $_;
-
+	
 	# Store the header into its own array
 	if( $header == 0 ) {
 	    @header = split( /\t/, $_ );
 
 	    $header = 1;
 
-	    next
+	    $gen->pprogres( -total => $total,
+			    -v => 1 );
+	    next;
 	}
 	
 	# Create a hash table with the @header as the key and each (split) column as the @value
 	my @l = split( /\t/, $_ );
 	my %data;
 	@data{ @header } = @l;
-
+	
+	 
 #	# If value doesn't exists set it to null
 #	foreach (keys %data ) {
 #	    $data{ $_ } = 'NULL' if( $data{ $_ } eq '');
 #	}
 	
 	# Create SQL
-	my ($sql_insert, 
-	    $sql_value,
-	    $constraint) = $mainDB->generate_sql( -table => $table,
-						  -data => \%data );
-	
-	# Insert SQL statement to the database
-	$mainDB->execute_sql( -insert => $sql_insert,
-			      -value => $sql_value,
-			      -constraint => $constraint );
-	
+	my $sql = $mainDB->generate_sql( -table => $table,
+					 -data => \%data );
+
+	next unless( defined $sql );
 	# Counter
 	$gen->pprogres( -total => $total,
 			-v => 1 );
+	
+	# Insert SQL statement to the database, if we're inserting many
+	# Just store the SQL which, we'll combine later on
+	if( $options{ -im } ) {
+	    
+	    %many_sql = %{ $sql };
+	    
+	    foreach( @{ $sql->{ -values } } ) {
+		push( @many_values, $_ );
+	    }
+	    
+	} else {
+	    
+	    $mainDB->insert_sql( -table => $table,
+				 %{$sql} );
+	}
+	
     }
     
     print "\n" if( $options{ -v } );
 
+    # If we're inserting many, combine the SQL and insert it to the DB
+    if( $options{ -im } && $#many_values > -1) {
+
+	$many_sql{ -values } = \@many_values;
+
+	$gen->pprint( -val => "Executing SQL Inserts" );
+	
+	$mainDB->insert_sql( -table => $table,
+			     %many_sql );
+    }
+    
+    
+    
     # Allows importing of SQL statement many at once, instead of one by one
     # this is currently deprecated
     # $mainDB->import_many() if( defined $options{ -im } );

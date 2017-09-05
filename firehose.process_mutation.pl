@@ -55,7 +55,11 @@ my $merge_file = "$options{ -f }.merge";
 # Load specific columns that needs to be remap
 my %map = ( 'Tumor_Sample_Barcode' => 'Stable_Sample_Id',
 	    'Chromosome' => 'Chr',
-	    'NCBI_Build' => 'Genome_Build' );
+	    'NCBI_Build' => 'Genome_Build',
+	    'Reference_Allele' => 'Ref_Allele',
+	    'Tumor_Seq_Allele2' => 'Var_Allele',
+	    'Start_position' => 'Start_Position',
+	    'End_position' => 'End_Position' );
 
 my %header = ( 'variant' => [ 'Tumor_Sample_Barcode',
 			      'VarKey',
@@ -77,8 +81,8 @@ my %header = ( 'variant' => [ 'Tumor_Sample_Barcode',
 	       
 	       'variant_sample_meta' => [ 'VarKey',
 					  'Tumor_Sample_Barcode',
-					  'Center',
 					  'Matched_Norm_Sample_Barcode',
+					  'Center',
 					  'Match_Norm_Seq_Allele1',
 					  'Match_Norm_Seq_Allele2',
 					  'Tumor_Validation_Allele1',
@@ -109,13 +113,11 @@ my %header = ( 'variant' => [ 'Tumor_Sample_Barcode',
 # Create a hash for var_sample_meta. Needed later on to make sure these values
 # are not generated to the variant_meta
 
-my %var_sample_meta;
-foreach( @{ $header{ variant_sample_meta } } ) {
-    $var_sample_meta{ $_ } = 1;
-}
+
+
+my %var_sample_meta = map{ $_ => 1 } @{ $header{ variant_sample_meta } };
 
 my $gen = new Generic( %options );
-
 
 # Merge the multiple maf from firehose into one file
 merge_files() unless( $options{ -sm } );
@@ -263,7 +265,8 @@ sub process_mutation {
 	my $check = check_fix_data( \%data );
 
 	next if( $check );
-	
+
+	# Fore each header, we will generate its value 
 	foreach (keys %header) {
 	    my @join;
 	    
@@ -280,6 +283,9 @@ sub process_mutation {
 		    
 		    $val = (defined $data{ $id } ) ? $data{ $id } : 'NA'
 		}
+		
+		$val =~ s/\"//g;
+		
 		push( @join, $val );
 	    }	
 	    $fh{ $_ }->print( join( "\t", @join) . "\n" );
@@ -463,12 +469,14 @@ sub check_fix_data {
     # from TCGA-OR-A5KP-10A-01D-A30A-10 to TCGA-OR-A5KP-10A
     
     # fix stable sample_id
+
     my $sid = $data->{ Tumor_Sample_Barcode };
     my @sid = split( /\-/, $sid );
     splice( @sid, -3 );
     
     $data->{ Tumor_Sample_Barcode } = join( "-", @sid );
-    
+    $data->{ Tumor_Sample_Barcode } =~ s/(.*)\w$/$1/;
+
     
     # fix Matched_Norm_Sample_Barcode
     $sid = $data->{ Matched_Norm_Sample_Barcode };
