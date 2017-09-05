@@ -35,7 +35,7 @@ OPTIONS :
 
      Database Operation
      -c     Commit Insert Statement (Default rollback)
-     -im    Insert many (Default one-by-one insert)
+     -io     Insert One by One (Default Insert Many
    
 AUTHOR:
     Alexander Butarbutar (ab\@oncodna.com), OncoDNA
@@ -51,7 +51,7 @@ GetOptions( 'd'        => \$options{ -d },
 	    'c'        => \$options{ -c },  
 	    'v'        => \$options{ -v },
 	    't=s'      => \$options{ -t },
-	    'im'       => \$options{ -im },         # insert many
+ 	    'io'       => \$options{ -io },         # insert many
 	    'db=s'     => \$options{ -db },
 	    'dbs=s'    => \$options{ -schema }
     ) or die "Incorrect Options $0!\n";
@@ -118,6 +118,7 @@ foreach( sort { $a <=> $b } keys %{ $dbpriority } ) {
     
     process_file( -t => $table,
 		  -f => $file );
+
 }
 
 # Commit & Disconnect
@@ -155,8 +156,6 @@ sub process_file {
     my %many_sql;
     my @many_values;
 
-    # Get contrain
-    
     # Read the file and process each line
     while( <IN> ) {
 	
@@ -172,41 +171,34 @@ sub process_file {
 			    -v => 1 );
 	    next;
 	}
-	
+
 	# Create a hash table with the @header as the key and each (split) column as the @value
 	my @l = split( /\t/, $_ );
 	my %data;
 	@data{ @header } = @l;
 	
-	 
-#	# If value doesn't exists set it to null
-#	foreach (keys %data ) {
-#	    $data{ $_ } = 'NULL' if( $data{ $_ } eq '');
-#	}
-	
 	# Create SQL
 	my $sql = $mainDB->generate_sql( -table => $table,
 					 -data => \%data );
-
+	
 	next unless( defined $sql );
+
 	# Counter
 	$gen->pprogres( -total => $total,
 			-v => 1 );
 	
-	# Insert SQL statement to the database, if we're inserting many
-	# Just store the SQL which, we'll combine later on
-	if( $options{ -im } ) {
+	# Insert SQL statement to the database;
+	if( $options{ -io } ) {
+   	    	    
+	    $mainDB->insert_sql( -table => $table,
+				 %{$sql} );
+	} else {
 	    
 	    %many_sql = %{ $sql };
 	    
 	    foreach( @{ $sql->{ -values } } ) {
 		push( @many_values, $_ );
 	    }
-	    
-	} else {
-	    
-	    $mainDB->insert_sql( -table => $table,
-				 %{$sql} );
 	}
 	
     }
@@ -214,7 +206,7 @@ sub process_file {
     print "\n" if( $options{ -v } );
 
     # If we're inserting many, combine the SQL and insert it to the DB
-    if( $options{ -im } && $#many_values > -1) {
+    if( ! defined $options{ -io } && $#many_values > -1 ) {
 
 	$many_sql{ -values } = \@many_values;
 
@@ -228,7 +220,7 @@ sub process_file {
     
     # Allows importing of SQL statement many at once, instead of one by one
     # this is currently deprecated
-    # $mainDB->import_many() if( defined $options{ -im } );
+    # $mainDB->import_many() if( defined $options{ -io } );
 
     close( IN );
 }

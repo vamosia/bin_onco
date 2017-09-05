@@ -28,8 +28,7 @@ my $gen;
 
                -schema   Schema. used in the database
 
-               -im       Insert Many. 
-                         SQL statement will be inserted many at once (default = one )
+               -io         Insert SQL statement one by one (default = many at once
 
                -c        Commit command for the database (default = 0)
                          
@@ -261,6 +260,44 @@ sub get_key_status {
                
 =cut
 
+sub check_data {
+    my( $class,
+	%param) = @_;
+
+    my $ret = 1;
+    my $table = $param{ -table };
+    my $data = $param{ -data };
+
+    # Does entrez_gene_id key exists.
+    my $entrez_key = get_valid_key( $class,
+				    -key => 'entrez_gene_id',
+				    -data => $data );
+
+    # if so check to see if entrez_gene_is valid;
+    if( defined $entrez_key ) {
+	
+	my $entrez_id = get_val( $class,
+				 -table => $table,
+				 -data => $data,
+				 -id => 'entrez_gene_id' );
+	
+	my $hugo = get_val( $class,
+			    -table => $table,
+			    -data => $data,
+			    -id => 'hugo_symbol' );
+	
+	if( $entrez_id == 0 ) {
+	    
+	    $gen->pprint( -tag => 'WARNING',
+			  -val => "Entrez not valid | HUGO : $hugo. Skipping processing of this line",
+			  -level => 2);;
+	    $ret = 0;
+	}
+    }
+    
+    return( $ret );
+}
+
 sub generate_sql {
     
     my ($class, %param) = @_;
@@ -276,6 +313,10 @@ sub generate_sql {
     my $constraint;
     my $reset_seq;
 
+    my $check = check_data( $class, %param );
+
+    return( undef ) if( $check == 0 );
+    
     foreach my $col ( sort keys %{ $dbtable{ $table } } ) {
 
 	my $val;
@@ -305,13 +346,19 @@ sub generate_sql {
 	
 	# Get the query to extract the forein_key 
 	if( $key_stat->{ key } eq 'fk' ) {
-	    
+
 	    $val = get_fk_val( $class,
 			       -data => $data, 
 			       %{ $key_stat } );
 	    
-	    $meta_fk = $val if( $meta == 1 );
-	
+	    if( $meta == 1 && ! defined $val ) {
+		$gen->pprint( -tag => 'error',
+			      -val => 'Meta FK not defined' );
+		
+	    } else {
+		$meta_fk = $val
+	    }
+	    
 	} else {
 	    
 	    # some of the column need to be map, so extract the data key from a function
@@ -319,17 +366,6 @@ sub generate_sql {
 			    -table => $table,
 			    -data => $data,
 			    -id => $col );
-	}
-	 
-	# If entrez_id does not exists on the database
-	# 0 means that entrez_gene_id is not valid
-	if( $table eq 'variant' && $col eq 'entrez_gene_id' && $val eq '0' ) {
-	    
-	    $gen->pprint( -tag => 'WARNING',
-			  -val => "Entrez not valid | $data->{ Stable_Sample_Id } | HUGO : $data->{ Hugo_Symbol }",
-			  -level => 2);
-	    
-	    return();
 	}
 
  	# For non meta table, store value to @value.
@@ -340,6 +376,7 @@ sub generate_sql {
 			  -level => 1,
 			  -val => "$key_stat->{ key } | TABLE: $table | COL: $col = VAL: $val",
 			  -d => 1 );
+	    
 	    push( @value, $val )
 	}
 
@@ -369,7 +406,7 @@ sub generate_sql {
 
 	    # Contruct PRIMAR_KEY, attr_id, attr_val
 	    my @value;
-	    
+
 	    foreach( @columns ) {
 		if( $_ eq 'attr_id' ) {
 		    push( @value, $key );
@@ -381,7 +418,12 @@ sub generate_sql {
 		    push( @value, $meta_fk )
 		}	    
 	    }
-		
+	    
+#	    $gen->pprint( -tag => "2.GENERATE_SQL  ", 
+#			  -level => 1,
+#			  -val => "META | TABLE: $table | COL: $key = VAL: '$val'",
+#			  -d => 1 );
+
 	    
 	    push( @values, \@value );
 	}
@@ -440,8 +482,11 @@ sub insert_sql {
 
     my $stmt_seq = $param{ -reset_seq } || "";
     
-    # Reset sequence to ensure consistency
-    if( exists $param{ -reset_seq } && defined $param{ -reset_seq } ) {
+    # Reset sequence to ensure consistency, do this only once
+    if( exists $param{ -reset_seq } && defined $param{ -reset_seq } && ! defined $options{ -io } ) {
+
+	$gen->pprint( -val => 'Resting Sequence (Pre)',
+		      -v => 1 );
 	
 	my $rv = $dbh->do( $stmt_seq ) or die $DBI::errstr;
     }
@@ -452,7 +497,7 @@ sub insert_sql {
     push( @var, "?") foreach( @{ $param{ -columns } } );
 
     my $var = join( ",", @var );
-
+    
     # Create a comma seperate list for columns
     my $cols = join( ",", @{ $col } );
     
@@ -473,8 +518,11 @@ sub insert_sql {
     
     print "\n" if( $options{-d} );
     
-    # Reset sequence to ensure consistency
+    # Reset sequence to ensure consistency, in case of rollback
     if( exists $param{ -reset_seq } && defined $param{ -reset_seq} ) {
+	
+	$gen->pprint( -val => 'Resting Sequence (Post)',
+		      -v => 1 );
 	
 	# Subsequent sequence reset should be false
 	$stmt_seq =~ s/false/true/;
@@ -483,7 +531,6 @@ sub insert_sql {
     }
   
 }
-
 
 =head2 get_fk_val
 
@@ -528,8 +575,7 @@ sub get_fk_val {
     } else {
 	
 	my( $fk_table, $fk_col ) = split( /\./, $param{ fk_table } );
-	
-	
+
 	$val = get_val( $class,
 			-data => $param{ -data },
 			-id => $fk_ref,
@@ -537,16 +583,15 @@ sub get_fk_val {
 	
 	#  SELECT patient_id FROM maindb_dev.patient WHERE STABLE_PATIENT_ID = 'TCGA-OR-A5K0'
 	$stmt = sprintf "SELECT %s FROM %s%s WHERE %s = ?", $fk_col, $schema, $fk_table, $fk_ref;
-	print Dumper $stmt;
+	
     }
     
     my $sth = $dbh->prepare( $stmt );
-    print Dumper $val;
+
     my $rv = $sth->execute( $val) or die $DBI::errstr;
     
     my @row = $sth->fetchrow_array();
-    print Dumper \@row;
-    exit;
+
     return( $row[0] );
 }
 
@@ -591,10 +636,10 @@ sub get_fk_sql {
 				  -id => $fk_ref,
 				  -table => $fk_table );
 	
-
+	
 	#  SELECT patient_id FROM maindb_dev.patient WHERE STABLE_PATIENT_ID = 'TCGA-OR-A5K0'
 	$ret = sprintf "SELECT %s FROM %s%s WHERE %s = %s", $fk_col, $schema, $fk_table, $fk_ref, $fk_ref_val;
-
+	
     }
 
     $ret = "($ret)";
@@ -668,9 +713,9 @@ sub get_val {
 			   -hugo => $data->{ $key_hugo } );
 	
     } 
-	    
-    # Set to null if not defined
-    $val = 'NULL' unless( defined $val );
+    
+    # TODO : Set to null or NA ??? if not defined
+    $val = 'NA' unless( defined $val );
     
     
     # Replace ' with '', but dont do it if we encounter a ( or )
@@ -707,6 +752,7 @@ sub get_valid_key {
     my( $class,
 	%param ) = @_;
 
+    my $ret;
     my $key = $param{ -key };
     
     # Capitalize the first letter
@@ -715,21 +761,22 @@ sub get_valid_key {
     my $data = $param{ -data };
     
     if ( exists $data->{ $key } ) {
-	# Do nothing, this is just to optimize the if search
+	$ret = $key;
 	
     } elsif ( exists $data->{ lc($key) } ) {
-	$key = lc($key);
+	$ret = lc($key);
 
     } elsif ( exists $data->{ uc($key) } ) {
-	$key = uc( $key );
+	$ret = uc( $key );
 
     } elsif( exists $data->{ $key_ucfirst } ) {
 	
-	$key = $key_ucfirst;
+	$ret = $key_ucfirst;
     } elsif( $key =~ /varkey/i ) {
-	$key = 'VarKey' if (exists $data->{ VarKey });
+	$ret = 'VarKey' if (exists $data->{ VarKey });
     }
-    return( $key );
+    
+    return( $ret );
 }
 
 
@@ -754,8 +801,7 @@ sub get_entrez {
 
     my ($class,
 	%param) = @_;
-    
-
+            
     my $stmt = "SELECT * FROM gene WHERE entrez_gene_id = ?";
 
     my $sth = $dbh->prepare( $stmt );
@@ -794,6 +840,7 @@ AND g.ENTREZ_GENE_ID = ga.ENTREZ_GENE_ID);
 
 	
     }
+    
     return( $ret );
 }
 

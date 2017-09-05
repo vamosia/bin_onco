@@ -472,8 +472,7 @@ sub check_fix_data {
 
     my $sid = $data->{ Tumor_Sample_Barcode };
     my @sid = split( /\-/, $sid );
-    splice( @sid, -3 );
-    
+
     $data->{ Tumor_Sample_Barcode } = join( "-", @sid );
     $data->{ Tumor_Sample_Barcode } =~ s/(.*)\w$/$1/;
 

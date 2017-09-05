@@ -49,7 +49,7 @@ my %map_key = ( 'cancer_study' => 'study_name',
 my %header = ( 'study'         => [qw(STUDY_NAME SOURCE DESCRIPTION)],
 	       'cancer_study'  => [qw(STUDY_NAME CANCER_ID)],
 	       'patient'       => [qw(STABLE_PATIENT_ID STUDY_NAME)],
-	       'sample'        => [qw(STABLE_PATIENT_ID STABLE_SAMPLE_ID STUDY_NAME CANCER_ID)] );
+	       'sample'        => [qw(STABLE_PATIENT_ID STABLE_SAMPLE_ID STUDY_NAME SAMPLE_TYPE CANCER_ID)] );
 
 my %header_meta;
 
@@ -81,8 +81,6 @@ sub generate_output {
 
     my $data = $_[0];
     
-    #my @header_pm = sort keys %header_pm;
-    #my @header_sm = sort keys %header_sm;
     my @header_pm = sort keys %{ $header_meta{ patient } };
     my @header_sm = sort keys %{ $header_meta{ sample } };
     
@@ -147,6 +145,7 @@ sub generate_output {
 	$uuid_cnt ++;
 	
 	my $pid = $data->{ $uuid }{ 'patient' }{ 'stable_patient_id' };
+
 	my $sn = $data->{ $uuid }{ 'patient' }{ 'study_name' };
 	
 	# $cat = patient, sample, sample-2, sample-3
@@ -313,8 +312,8 @@ sub process_patient_sample {
  		$_ = "${_}_tcga" for @study_name;
 		
 		# ADD TO HASH : the study_name tag to the patient hash
-		store_to_data( -id0 => 'patient',
-			       -id1 => 'study_name',
+		store_to_data( -col0 => 'patient',
+			       -col1 => 'study_name',
 			       -key => \@key,
 			       -data => \%data, 
 			       -line => \@study_name );
@@ -350,16 +349,16 @@ sub process_patient_sample {
 	    
 	    @patient_list = @line if( $header[1] eq 'stable_patient_id' );
 	    
-	    store_to_data( -id0 => 'patient',
-			   -id1 => $header[1],
+	    store_to_data( -col0 => 'patient',
+			   -col1 => $header[1],
 			   -key => \@key,
 			   -data => \%data, 
 			   -line => \@line );
 
 	} elsif($header[1] eq 'primary_pathology' && $#header == 2) {
 
-	    store_to_data( -id0 => 'patient',
-			   -id1 => $header[2],
+	    store_to_data( -col0 => 'patient',
+			   -col1 => $header[2],
 			   -key => \@key,
 			   -data => \%data, 
 			   -line => \@line );
@@ -372,9 +371,9 @@ sub process_patient_sample {
 		$_ = uc for @line;
 	    }
 	    
-	    # id0 has to be header[2] as sometiems its sample-2, sample-3
-	    store_to_data( -id0 => $header[2],
-			   -id1 => $header[3],
+	    # col0 has to be header[2] as sometiems its sample-2, sample-3
+	    store_to_data( -col0 => $header[2],
+			   -col1 => $header[3],
 			   -key => \@key,
 			   -data => \%data, 
 			   -line => \@line );
@@ -390,15 +389,15 @@ sub process_patient_sample {
 		my @cancer_id = @disease_code;
 		$_ = $map_cancer_id->{ $_ }{ 'cancer_id' } for @cancer_id;
 		
-		store_to_data( -id0 => $header[2],
-			       -id1 => 'cancer_id',
+		store_to_data( -col0 => $header[2],
+			       -col1 => 'cancer_id',
 			       -key => \@key,
 			       -data => \%data, 
 			       -line => \@cancer_id );
 		
 		# Add the stable_patient_id to the sample hash
-		store_to_data( -id0 => $header[2],
-			       -id1 => 'stable_patient_id',
+		store_to_data( -col0 => $header[2],
+			       -col1 => 'stable_patient_id',
 			       -key => \@key,
 			       -data => \%data, 
 			       -line => \@patient_list );
@@ -431,25 +430,47 @@ sub store_to_data {
     my $max = scalar @{ $param{ -key } } - 1;
     
     for my $idx( 0 .. $max ) {
-	my $key = $param{ -key }[ $idx ];
-	my $id0 = $param{ -id0 };
-	my $id1 = $param{ -id1 };
+	my $uuid = $param{ -key }[ $idx ];
+	my $col0 = $param{ -col0 };
+	my $col1 = $param{ -col1 };
 	my $val = $param{ -line }[ $idx ];
-	
-	$param{ -data }{ $key }{ $id0 }{ $id1 } = $val;
 
-	# store the header for meta columns
-	if( $id0 eq 'patient' ) {
-	    $header_pm{ $id1 } = undef;
-	    
-	} elsif ( $id0 eq 'sample' ) {
-	    $header_sm{ $id1 } = undef;
+	
+	# modify TCGA-OR-A5KP-01A to TCGA-OR-A5KP-01
+	if( $col1 =~ /stable_sample_id/ ) {
+
+	    my @sid = split( /\-/, $val );
+
+	    splice( @sid, 4 );
+
+	    $val = join ("-",, @sid);
+
+	    $val =~ s/(.*)\w$/$1/;
+
 	}
-	# id1 = patient or sample
-	if( $id0 =~ /^sample/ ) {
-	    $header_meta{ sample }{ $id1 } = undef;
+	
+	
+	$param{ -data }{ $uuid }{ $col0 }{ $col1 } = $val;
+	
+	# # store the header for meta columns
+	# if( $col0 eq 'patient' ) {
+	#     $header_pm{ $col1 } = undef;
+	    
+	# } elsif ( $col0 eq 'sample' ) {
+	#     $header_sm{ $col1 } = undef;
+	# }
+	
+	# col1 = patient or sample
+	if( $col0 =~ /^sample/ ) {
+
+	    # Ignore sample_type for meta 
+	    unless ( $col1 =~ /^sample_type$/i ) {
+		
+		$header_meta{ sample }{ $col1 } = undef;
+	    }
+	    
 	} else {
-	    $header_meta{ $id0 }{ $id1 } = undef;
+	    $header_meta{ $col0 }{ $col1 } = undef;
 	}
 	
     }

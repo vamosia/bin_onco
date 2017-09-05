@@ -267,7 +267,7 @@ CREATE TABLE IF NOT EXISTS public.sample (
     ON UPDATE NO ACTION);
 
 ALTER TABLE public.sample
-  ADD CONSTRAINT sample_uniq UNIQUE(patient_id, stable_sample_id, cancer_id);
+  ADD CONSTRAINT sample_uniq UNIQUE(patient_id, stable_sample_id, sample_type, cancer_id);
 
 -- -----------------------------------------------------
 -- Table public.sample_meta
