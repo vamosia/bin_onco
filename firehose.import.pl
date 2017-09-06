@@ -45,12 +45,16 @@ AUTHOR:
 my %dbtable;
 my %dbpriority;
 
+$| = 1; #Flush buffer off
+
 # Get User Options
 my %options = ( -db => 'maindb_dev' );
 GetOptions( 'd'        => \$options{ -d },
+	    'dd'       => \$options{ -dd },
+	    'ddd'      => \$options{ -ddd },
 	    'c'        => \$options{ -c },  
 	    'v'        => \$options{ -v },
-	    't=s'      => \$options{ -t },
+	    't=s'      => \$options{ -table },
  	    'io'       => \$options{ -io },         # insert many
 	    'db=s'     => \$options{ -db },
 	    'dbs=s'    => \$options{ -schema }
@@ -91,8 +95,7 @@ foreach( sort { $a <=> $b } keys %{ $dbpriority } ) {
     
     my $table = $dbpriority->{ $_ };
     
-    # These are part of seedDB so skip importing
-    # as it will be imported by a different script maindb.load.seed.pl
+    # Skip tables related to seeDB
     if( exists $seed_table{ $table } ) {
 	#$gen->pprint( -tag => 'IGNORE', 
 	#	      -val => "$table is part of seedDB",
@@ -103,7 +106,7 @@ foreach( sort { $a <=> $b } keys %{ $dbpriority } ) {
     my $file =  "data_${table}.txt";
     
     # $options{ -t } is used to import specific tables
-    next if( defined $options{ -t } && $table ne $options{ -t } );
+    next if( defined $options{ -table } && $table ne $options{ -table } );
     
     # if file does not exists
     unless( -e $file ) {
@@ -116,18 +119,13 @@ foreach( sort { $a <=> $b } keys %{ $dbpriority } ) {
     $gen->pprint( -level => 0, 
 		  -val => "Importing file from '$file' to table '$table'" );
     
-    process_file( -t => $table,
-		  -f => $file );
+    process_file( -table => $table,
+		  -file => $file );
 
 }
 
 # Commit & Disconnect
 $mainDB->close();
-
-
-############################################################
-# SUBROUTINE
-############################################################
 
 =head2 process_file
 
@@ -143,8 +141,8 @@ sub process_file {
     
     my( %param ) = @_;
 
-    my $file = $param{ -f };
-    my $table = $param{ -t };
+    my $file = $param{ -file };
+    my $table = $param{ -table };
     
 
     my $total = `more $file | wc -l`; chomp $total;
@@ -160,7 +158,7 @@ sub process_file {
     while( <IN> ) {
 	
 	chomp $_;
-	
+
 	# Store the header into its own array
 	if( $header == 0 ) {
 	    @header = split( /\t/, $_ );
@@ -171,59 +169,30 @@ sub process_file {
 			    -v => 1 );
 	    next;
 	}
-
+	
 	# Create a hash table with the @header as the key and each (split) column as the @value
 	my @l = split( /\t/, $_ );
 	my %data;
 	@data{ @header } = @l;
 	
 	# Create SQL
-	my $sql = $mainDB->generate_sql( -table => $table,
-					 -data => \%data );
-	
-	next unless( defined $sql );
+	$mainDB->generate_sql( -data => \%data,
+			       %param );
 
 	# Counter
 	$gen->pprogres( -total => $total,
 			-v => 1 );
 	
-	# Insert SQL statement to the database;
-	if( $options{ -io } ) {
-   	    	    
-	    $mainDB->insert_sql( -table => $table,
-				 %{$sql} );
-	} else {
-	    
-	    %many_sql = %{ $sql };
-	    
-	    foreach( @{ $sql->{ -values } } ) {
-		push( @many_values, $_ );
-	    }
-	}
-	
     }
-    
     print "\n" if( $options{ -v } );
-
-    # If we're inserting many, combine the SQL and insert it to the DB
-    if( ! defined $options{ -io } && $#many_values > -1 ) {
-
-	$many_sql{ -values } = \@many_values;
-
-	$gen->pprint( -val => "Executing SQL Inserts" );
-	
-	$mainDB->insert_sql( -table => $table,
-			     %many_sql );
-    }
     
+    $gen->pprint( -val => "Executing SQL Inserts" );
     
-    
-    # Allows importing of SQL statement many at once, instead of one by one
-    # this is currently deprecated
-    # $mainDB->import_many() if( defined $options{ -io } );
-
+    $mainDB->insert_sql( %param );
+        
     close( IN );
 }
+
 
 =head2 test_connection
 

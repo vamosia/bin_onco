@@ -11,6 +11,7 @@ use Storable;
 my %options = ( -s => 'TCGA (2016_01_28)' );
 
 GetOptions( "d"      => \$options{ -d },
+	    "dd"     => \$optiosn{ -dd },
 	    "v"      => \$options{ -v },
 	    "s=s"      => \$options{ -s }
     ) or die "Incorrect Options $0!\n";
@@ -49,7 +50,7 @@ my %map_key = ( 'cancer_study' => 'study_name',
 my %header = ( 'study'         => [qw(STUDY_NAME SOURCE DESCRIPTION)],
 	       'cancer_study'  => [qw(STUDY_NAME CANCER_ID)],
 	       'patient'       => [qw(STABLE_PATIENT_ID STUDY_NAME)],
-	       'sample'        => [qw(STABLE_PATIENT_ID STABLE_SAMPLE_ID STUDY_NAME SAMPLE_TYPE CANCER_ID)] );
+	       'sample'        => [qw(STABLE_PATIENT_ID STABLE_SAMPLE_ID STUDY_NAME CANCER_ID)] );
 
 my %header_meta;
 
@@ -463,11 +464,7 @@ sub store_to_data {
 	# col1 = patient or sample
 	if( $col0 =~ /^sample/ ) {
 
-	    # Ignore sample_type for meta 
-	    unless ( $col1 =~ /^sample_type$/i ) {
-		
-		$header_meta{ sample }{ $col1 } = undef;
-	    }
+	    $header_meta{ sample }{ $col1 } = undef;
 	    
 	} else {
 	    $header_meta{ $col0 }{ $col1 } = undef;

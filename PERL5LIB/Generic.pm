@@ -71,25 +71,30 @@ sub read_file {
 }
 
 sub pprint {
-    
-    my ($class, %param) = @_;
 
+    my ($class, %param) = @_;
+    
+    return() if( defined $param{ -v } && ! defined $options{ -v } );
+    return() if( defined $param{ -d } && ! defined $options{ -d } );
+    return() if( defined $param{ -dd } && ! defined $options{ -dd } );
+    return() if( defined $param{ -ddd } && ! defined $options{ -ddd } );
+    
+    
     my $val = $param{ -val } || "";
-    my $time  = `date`; chomp $time;
+    # Turns out time stamp is not ideal for processing large / big data.
+    # Removing it
+    # TODO : figure out a better way to do this
+    #my $time  = `date`; chomp $time;
+    
     my $tag = $param{ -tag } || "INFO";
     my $red = ( $tag =~ /error/i || $tag =~ /warning/i ) ? 1 : 0;
-    my $stamp = "[$time] [" . uc($tag) ."] ";
-    
-    # Do nothing
-    return() if( defined $param{ -d } && ! defined $options{ -d } );
-    return() if( defined $param{ -v } && ! defined $options{ -v } );
-
+    #my $stamp = "[$time] [" . uc($tag) ."] ";
+    my $stamp = "[" . uc($tag) ."] ";
     print color('bold red') if( $red );
 
     if( ! exists $param{ -level } ) {
 	print $stamp;
 	print "$val\n";
-	
 	
     } elsif( $param{ -level } == 0 ) {
 	print "$stamp\n";
@@ -115,7 +120,7 @@ sub pprint {
     
 }
 
-sub pprogress_reset {
+sub pprogres_reset {
     $p_cnt = 0;
 }
 
@@ -123,16 +128,21 @@ sub pprogres {
 
     my( $class,
 	%param ) = @_;
-	
+
+    
+
     # Do nothing
     return() if( defined $param{ -d } && ! defined $options{ -d } );
+    return() if( defined $param{ -dd } && ! defined $options{ -dd } );
     return() if( defined $param{ -v } && ! defined $options{ -v } );
 
     my $total = $param{ -total };
     
     $p_cnt++;
    
-    printf "Processing.. %s/%s (%.1f%%)  \r", $p_cnt, $total, (($p_cnt/$total)*100);
+    printf "Processing.. %s/%s (%.1f%%)\r", $p_cnt, $total, (($p_cnt/$total)*100);
+ 
+    
 }
 
 1;

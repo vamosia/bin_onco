@@ -56,6 +56,7 @@ my $merge_file = "$options{ -f }.merge";
 my %map = ( 'Tumor_Sample_Barcode' => 'Stable_Sample_Id',
 	    'Chromosome' => 'Chr',
 	    'NCBI_Build' => 'Genome_Build',
+	    'Hugo_Symbol' => 'Hugo_Gene_Symbol',
 	    'Reference_Allele' => 'Ref_Allele',
 	    'Tumor_Seq_Allele2' => 'Var_Allele',
 	    'Start_position' => 'Start_Position',
@@ -169,9 +170,7 @@ sub load_meta_mapping {
 sub process_mutation {
     
     $gen->pprint( -val => "Processing $pwd/$merge_file" );
-	
     
-    open( IN, "<$merge_file" ) or die "$!\n";
 
     my $total = `more $merge_file | wc -l`; chomp $total;
     
@@ -207,6 +206,8 @@ sub process_mutation {
 	}
     }
 
+    open( IN, "<$merge_file" ) or die "$!\n";
+    
     while( <IN> ) {
 
 	chomp $_;
@@ -390,6 +391,7 @@ sub merge_files {
     my $dirname = '.';
     
     opendir(DIR, $dirname) or die "Could not open $dirname\n";
+    
     my $print_header = 0;
     
     while (my $filename = readdir(DIR)) {
@@ -413,6 +415,7 @@ sub merge_files {
 	    if( $print_header == 0 ) {
 		$print_header = 1 if( $_ =~ /^Hugo_Symbol/ );
 		print OUT $_,"\n";
+
 	    }	
 	    
 	    if( $header == 0 ) {
@@ -450,7 +453,7 @@ sub check_fix_data {
     # Reference_Allele    Tumor_Seq_Allele1    Tumo_Seq_Allele2
 
     if( $data->{ Reference_Allele } ne $data->{ Tumor_Seq_Allele1 } ) {
-
+	print Dumper $data;
 	$gen->pprint( -tag => 'ERROR', 
 		      -val => "$data->{ Reference_Allele } != $data->{ Tumor_Seq_Allele1 }" );
     }
@@ -466,17 +469,16 @@ sub check_fix_data {
     }
     
     # Fix stable id
-    # from TCGA-OR-A5KP-10A-01D-A30A-10 to TCGA-OR-A5KP-10A
+    # from TCGA-OR-A5KP-10A-01D-A30A-10 to TCGA-OR-A5KP-10
     
     # fix stable sample_id
 
     my $sid = $data->{ Tumor_Sample_Barcode };
     my @sid = split( /\-/, $sid );
-
+    splice( @sid, -3 );
     $data->{ Tumor_Sample_Barcode } = join( "-", @sid );
     $data->{ Tumor_Sample_Barcode } =~ s/(.*)\w$/$1/;
 
-    
     # fix Matched_Norm_Sample_Barcode
     $sid = $data->{ Matched_Norm_Sample_Barcode };
     @sid = split( /\-/, $sid );
