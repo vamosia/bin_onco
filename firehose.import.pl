@@ -58,21 +58,42 @@ GetOptions( 'd'        => \$options{ -d },
  	    'io'       => \$options{ -io },         # insert many
 	    'db=s'     => \$options{ -db },
 	    'dbs=s'    => \$options{ -schema }
+	    
     ) or die "Incorrect Options $0!\n";
 
 
-my %seed_table = ( 'cancer_type' => '',
-		   'gene' => '',
-		   'gene_alias' => '' );
 
+my %load_table = ( 'seed' => { 'cancer_type' => '',
+			       'gene' => '',
+			       'gene_meta' => '',
+			       'gene_alias' => '' },
+		   'variants' => { 'variant' => '',
+				  'variant_meta' => '' },
+		   'cnvs' => { 'cnv' => '',
+			      'cnv_sample' => '',
+			      'cnv_meta' => '' },
+		   
+		   'data' => { 'study' => '',
+			       'cancer_study' => '',
+			       'patient' => '',
+			       'patient_meta' => '',
+			       'sample' => '',
+			       'sample_meta' => '' } );
+			       
 my $gen = new Generic( %options );
+
+$gen->pprint( -level => 0,
+	      -val => "FIREHOSE IMPORT" );
+
+$gen->pprint( -tag => 'error',
+	      -val => '-t required' ) unless( defined $options{ -table } );
+
 
 my $mainDB = new MainDB( %options );
 
 my %sql;
 
-$gen->pprint( -level => 0,
-	      -val => "FIREHOSE IMPORT" );
+
 
 # Load the database structure
 $mainDB->load_dbtable();
@@ -94,23 +115,24 @@ foreach( sort { $a <=> $b } keys %{ $dbpriority } ) {
     %sql = ();
     
     my $table = $dbpriority->{ $_ };
-    
-    # Skip tables related to seeDB
-    if( exists $seed_table{ $table } ) {
-	#$gen->pprint( -tag => 'IGNORE', 
-	#	      -val => "$table is part of seedDB",
-	#	      -v => 1 );
-	next;
-    }
-    
+
     my $file =  "data_${table}.txt";
     
-    # $options{ -t } is used to import specific tables
-    next if( defined $options{ -table } && $table ne $options{ -table } );
+    if( exists $load_table{ $options{-table} } ) {
+	
+	next unless( exists $load_table{ $options{-table} }{ $table } );
+
+	$file =  "data_${table}.psv" if( $options{-table} eq 'seed' );
+	
+    } else {
+	
+	next if( $options{-table } ne $table );
+
+    }
     
     # if file does not exists
     unless( -e $file ) {
-	$gen->pprint( -tag => 'WARNING',
+	$gen->pprint( -tag => 'error',
 		      -level => 2, 
 		      -val => "File does not exists : $file" );
 	next;
@@ -142,10 +164,12 @@ sub process_file {
     my( %param ) = @_;
 
     my $file = $param{ -file };
-    my $table = $param{ -table };
     
-
     my $total = `more $file | wc -l`; chomp $total;
+
+
+    
+    $gen->pprogres_reset();
     
     open( IN, "<$file" ) or die "$!\n";
 
@@ -159,37 +183,44 @@ sub process_file {
 	
 	chomp $_;
 
+
 	# Store the header into its own array
 	if( $header == 0 ) {
-	    @header = split( /\t/, $_ );
+
+	    @header = split( /[\t\|]/, $_ );
 
 	    $header = 1;
-
-	    $gen->pprogres( -total => $total,
-			    -v => 1 );
+	    
+	    $total-- if( $total > 1 );
+	    
 	    next;
 	}
-	
-	# Create a hash table with the @header as the key and each (split) column as the @value
-	my @l = split( /\t/, $_ );
-	my %data;
-	@data{ @header } = @l;
-	
-	# Create SQL
-	$mainDB->generate_sql( -data => \%data,
-			       %param );
+
 
 	# Counter
 	$gen->pprogres( -total => $total,
 			-v => 1 );
+
 	
+	# Create a hash table with the @header as the key and each (split) column as the @value
+	my %data;
+
+	@data{ @header } = split( /[\t\|]/, $_ );
+	
+	# Create SQL
+	$mainDB->generate_sql( -data => \%data,
+			       %param );
+		
     }
+    
     print "\n" if( $options{ -v } );
     
-    $gen->pprint( -val => "Executing SQL Inserts" );
+    $gen->pprint( -val => "SQL Inserts..." );
     
     $mainDB->insert_sql( %param );
-        
+    
+    $mainDB->reset_sql();
+    
     close( IN );
 }
 

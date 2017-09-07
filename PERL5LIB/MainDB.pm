@@ -24,6 +24,8 @@ my %many_sql;
 my %gene_entrez;
 my %gene_hugo;
 my %gene_alias;
+my %table_sample;
+my %table_cnv;
 =head2 new
 
     Function : Creating new class
@@ -64,7 +66,49 @@ sub new {
     load_dbpriority();
 
     load_gene();
+
     load_gene_alias();
+
+    # Preload the sample and cnv into hash for importing these data
+    # this is done to optimize the import speed, otherwise will take too ling
+    if( $param{ -table } =~ /cnv/i ) {
+
+	$gen->pprint( -val => "Loading sample data" );
+	
+	# Load the sample data
+	my $sample = qq(sudo -i -u postgres psql $db -c  "\\copy (SELECT sample_id, stable_sample_id FROM sample) To '/tmp/sample.tsv' With DELIMITER E'\\t' CSV HEADER");
+
+	system( $sample );
+
+
+	my $r  = $gen->read_file( -file => '/tmp/sample.tsv',
+				  -delim => '\t');
+	
+	foreach my $line( @{ $r->{ data } } ) {
+
+	    my $stable_id = $line->{ stable_sample_id };
+
+	    my $sample_id = $line->{ sample_id };
+	    
+	    $table_sample{ $stable_id } = $sample_id;	    
+	}
+	
+	$gen->pprint( -val => "Loading cnv data" );
+	
+	my $cnv = qq(sudo -i -u postgres psql $db -c  "\\copy (SELECT * from cnv) To '/tmp/cnv.tsv' With DELIMITER E'\\t' CSV HEADER");
+	system( $cnv );
+		
+	$r  = $gen->read_file( -file => '/tmp/cnv.tsv',
+			       -delim => '\t');
+	
+	foreach my $line( @{ $r->{ data } } ) {
+	    my $cnv_id = $line->{ cnv_id };
+	    my $alt = $line->{ alteration };
+	    my $entrez = $line->{ entrez_gene_id };
+
+	    $table_cnv{ "${entrez}_${alt}" } = $cnv_id;
+	}
+    }
     
     my $self = {};
     
@@ -341,8 +385,10 @@ sub check_fix_data {
 				    -key => 'entrez_gene_id',
 				    -data => $data );
 
+    my $hk =  ($table eq 'gene_alias' ) ? 'gene_alias' : 'hugo_gene_symbol';
+    
     my $hugo_key = get_valid_key( $class,
-				  -key => 'hugo_gene_symbol',
+				  -key => $hk,
 				  -data => $data );
 
     # Does entrez_gene_id key exists.
@@ -357,9 +403,9 @@ sub check_fix_data {
 	my $hugo = get_val( $class,
 			    -table => $table,
 			    -data => $data,
-			     -id => 'hugo_gene_symbol' );
-
-	if( $entrez =~ /^\d+$/ ) {
+			     -id => $hk );
+	
+	if( $entrez =~ /^-*\d+$/ ) {
 
 	    # If found entrez is different from the data, store the new one
 	    if(  $entrez ne $data->{ $entrez_key } ) {
@@ -372,10 +418,12 @@ sub check_fix_data {
 	} else {
 
 	    $ret = 0;
+	    
 	    $gen->pprint( -tag => 'WARNING',
 			  -val => "Entrez not valid | HUGO : $hugo ($data->{ Entrez_Gene_Id } ). Skipping processing of this line",
 			  -level => 2,
-			  -dd => 1 );
+			  -d => 1 );
+			
 	    
 	    
 	}
@@ -395,10 +443,9 @@ sub generate_sql {
     my $constraint;
     my $reset_seq;
     
-
     # Precheck
     return() if( check_fix_data( $class, %param ) == 0 );    
-
+    
     if( $meta == 0 ) {
 	
 	foreach my $col ( sort keys %{ $dbtable{ $table } } ) {
@@ -420,28 +467,49 @@ sub generate_sql {
 		
 		$gen->pprint( -tag => "ERROR",
 			      -val => "Reset sequence should not be defined" ) if( defined $reset_seq );
-		
-		$reset_seq = "SELECT SETVAL('${col}_seq', COALESCE( MAX($col), 1), false) FROM $table";
+
+		$reset_seq = "SELECT SETVAL('${col}_seq', case when MAX($col) is NULL then 1 ELSE MAX($col) end, true) FROM $table";
+
 	    }	
 	    
 	    # PK - If the colums is a primary key that's auto generated, don't need to handle this
 	    if ( $key_stat->{ key } eq 'pk' && $key_stat->{ pk_auto } eq 'auto' ) {
 		
 		next;
+
+		
+	    } elsif( $key_stat->{ key } eq 'fk' && $table =~ /cnv/ ) {
+
+		# This is purely for optiomzation, so we don't hit the db query multiple times
+		
+		my $entrez = $data->{ Entrez_Gene_Id };
+		my $alt = $data->{ Alteration };
+		my $stable_id = $data->{ Stable_Sample_Id };
+		
+		if( $col =~ /^cnv_id$/ ) {
+		    $val = $table_cnv{ "${entrez}_${alt}" };
+		    
+		} elsif( $col =~ /^sample_id$/ ) {
+
+		    $val = $table_sample{ $stable_id };
+		}
+		
+		
 		
 	    } elsif( $key_stat->{ key } eq 'fk' && ! ($col =~ /entrez_gene_id/ ) ) {
 
 		# FK - Get the query to extract the foreign_key
 		# Entrez_Gene_ID is handled by get_val not get_fk_val
-
+		
 		$val = get_fk_val( $class,
 				   -data => $data, 
 				   %{ $key_stat } );
-
+		
 		unless( defined $val ) {
+
 		    $gen->pprint( -tag => 'WARNING',
-				  -val => "FK Not Defined for '$key_stat->{ table }' using '$key_stat->{ fk_ref }'",
-				  -dd => 1 );
+				  -val => "FK Not Defined for '$key_stat->{ table }' using '$key_stat->{ fk_ref }'" );
+
 		    return( undef );
 		}
 		
@@ -456,10 +524,16 @@ sub generate_sql {
 		
 		
 	    }
-
+	    unless( defined $val ) {
+		$gen->pprint( -tag => "warning",
+			      -val => "Value not defined for $col",
+			      -d => 1 );
+	    }
+	    
 	    push( @value, $val );   	    	     	    
 	    push( @columns, $col ); # This needs to be here are we don't want the value that's skipped by next
 	    
+
 	    $gen->pprint( -tag => "1.GENERATE_SQL  ", 
 			  -level => 1,
 			  -val => "$key_stat->{ key } | TABLE: $table | COL: $col = VAL: $val",
@@ -470,6 +544,7 @@ sub generate_sql {
 	}# End for loop
 	push( @values, \@value  );
 
+	   
     } else {
 	
 	# For meta table, we first need to extract the main fk
@@ -524,6 +599,8 @@ sub generate_sql {
 	# now go thorugh each data
 	while( my( $key, $val ) = each(%{ $data } ) ) {
 
+	    $val = 'null' unless( defined $val );
+	    
 	    # Skip inserting these value, there's nothing here
 	    next if ($val eq ''  || $val eq  ',' || $val eq '.' || $val =~ /^,+$/);
 
@@ -566,7 +643,7 @@ sub generate_sql {
 
 
     if( $param{ -io } ) {
-
+	
 	insert_sql( $class, %sql );
 
 
@@ -586,6 +663,10 @@ sub generate_sql {
     Args     : 
                
 =cut
+
+sub reset_sql {
+    @many_sql = ();
+}
 
 sub insert_sql {
 
@@ -621,8 +702,8 @@ sub insert_sql {
     # Reset sequence to ensure consistency, do this only once
     if( exists $param{ -reset_seq } && defined $param{ -reset_seq } && ! defined $options{ -io } ) {
 
-#	$gen->pprint( -val => 'Reseting Sequence (Pre)',
-#		      -v => 1 );
+	$gen->pprint( -val => "Reseting Sequence (Pre)\n$stmt_seq\n",
+		      -dd => 1 );
 	
 	my $rv = $dbh->do( $stmt_seq ) or die $DBI::errstr;
     }
@@ -638,31 +719,39 @@ sub insert_sql {
     my $cols = join( ",", @{ $col } );
     
     # Generate the sql statement
-    my $stmt = "INSERT INTO $table ($cols) VALUES($var) $const";
+    my $stmt = "INSERT INTO ${schema}${table} ($cols) VALUES($var) $const";
     
     $gen->pprint( -tag => 'EXECUTE',
 		  -val => "\n\n$stmt_seq;\n$stmt\n",
 		  -dd => 1 );
 
-    # Prepare the sql statement
+    # Prepare the sql statement   
     my $sth = $dbh->prepare( $stmt );
-
-    foreach my $q ( @{ $val} ) {
-	print( "('" . join( "' , '", @{$q} ) . "')\n" ) if( $options{ -dd } );
-	my $rv = $sth->execute( @{$q} ) or die $DBI::errstr;
+    my $total;
+    if( $options{ -v } ) {
+	print "\n";
+	$total = $#$val+1;
+	$gen->pprogres_reset();
     }
+    
+    foreach my $q ( @{ $val} ) {
 
+	print( "('" . join( "' , '", @{$q} ) . "')\n" ) if( $options{ -dd } );
+	
+	my $rv = $sth->execute( @{$q} ) or die $DBI::errstr;
+
+	$gen->pprogres( -total => $total,
+			 -v => 1 );
+    }
+    print "\n" if( $options{ -v } );
     
     
     # Reset sequence to ensure consistency, in case of rollback
     if( exists $param{ -reset_seq } && defined $param{ -reset_seq} ) {
 	
-	#$gen->pprint( -val => 'Reseting Sequence (Post)',
-       	#      -v => 1 );
-	
-	# Subsequent sequence reset should be false
-	$stmt_seq =~ s/false/true/;
-	
+	$gen->pprint( -val => 'Reseting Sequence (Post)\n$stmt_seq\n',
+		      -dd => 1 );
+
 	my $rv = $dbh->do( $stmt_seq ) or die $DBI::errstr;
     }
   
@@ -678,6 +767,7 @@ sub insert_sql {
 =cut
 
 sub get_fk_val {
+    
     my( $class, 
 	%param ) = @_;
     
@@ -765,6 +855,7 @@ sub get_val {
 
     my $data = $param{ -data };
     my $key = $param{ -id };
+    my $table = $param{ -table };
     my $val;
     
     # Contruct VarKey if needed
@@ -779,7 +870,7 @@ sub get_val {
 	    my @VarKey = qw(CHR START_POSITION END_POSITION REF_ALLELE VAR_ALLELE);
 	    
 	    my @line;
-
+	    
 	    foreach( @VarKey ) {
 		$gen->pprint( -tag => 'ERROR',
 			      -val => "$_ for VarKey does not exists" ) unless( $data->{ $_ } );
@@ -789,10 +880,12 @@ sub get_val {
 	    $val = join( "_", @line );
 	}
 	
-       } elsif( $key =~ /^entrez_gene_id$/i ) {
+    } elsif( $key =~ /^entrez_gene_id$/i ) {
+	
+	my $hk =  ($table eq 'gene_alias' ) ? 'gene_alias' : 'hugo_gene_symbol';
 	   
 	my $key_hugo = get_valid_key( $class,
-				      -key => 'hugo_gene_symbol',
+				      -key => $hk,
 				      -data => $data );
 
 	my $key_entrez = get_valid_key( $class,
@@ -901,9 +994,10 @@ sub get_valid_key {
 =cut
 
 sub get_entrez {
+    
     my( $class,
 	%param ) = @_;
-
+    
     my $q_entrez = $param{ -entrez } || 0;
     my $q_hugo = $param{ -hugo };
     my $hugo = "NA";
@@ -926,7 +1020,7 @@ sub get_entrez {
 	$entrez = $gene_alias{ $q_hugo };
 	$hugo = $gene_entrez{ $entrez };
     }
-    
+
     if( $entrez ne 'NA' &&
 	($q_entrez ne $entrez) && 
 	! exists $seen_entrez_map{ $q_hugo } ) {
@@ -955,13 +1049,17 @@ sub format_stable_id {
 	%param ) = @_;
     
     my $ret;
+
     if( $param{ -id } eq 'sample' ) {
-	
-	my @sid = split( /\-/, $param{ -val } );
-	splice( @sid, 3 );
+	my $data = $param{ -data };
+	my $val = $param{ -val };
+	my @sid = split( /\-/, $data->{ $val } );
+	splice( @sid, 4 );
+
 	$ret = join( "-", @sid );
-	$ret =~ s/(.*)\w$/$1/;
+	$ret =~ s/(.*)[a-zA-Z]$/$1/;
     }
+
     return( $ret );
 }
 

@@ -40,7 +40,7 @@ sub read_file {
 
     $delim = "\\|" if( $delim eq "|" );
     $delim = "\\," if( $delim eq "," );
-    
+
     while( <IN> ) {
 	
 	chomp $_;
@@ -55,11 +55,9 @@ sub read_file {
 	    next;
 	}
 
-	my @line = split( /$delim/, $_ );
-
 	my %line;
-
-	@line{ @header } = @line;
+	
+	@line{ @header } = split( /$delim/, $_ );
 
 	
 	push( @data, \%line );
@@ -69,6 +67,7 @@ sub read_file {
     
     return({ header => \@header, data => \@data });
 }
+
 
 sub pprint {
 

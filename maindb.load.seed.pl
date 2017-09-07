@@ -48,9 +48,12 @@ AUTHOR:
 
  
 
-my %options = ( -db => 'maindb_dev' );
+my %options = ( -db => 'maindb' );
 
 GetOptions( "d"        => \$options{ -d },
+	    "dd"       => \$options{ -dd },
+	    "ddd"      => \$options{ -ddd },
+	    "t"        => \$options{ -t },
 	    "db=s"     => \$options{ -db },
 	    "v"        => \$options{ -v },
 	    "it=s"     => \$options{ -it },
@@ -81,8 +84,9 @@ $gen->pprint( -level => 0,
 foreach my $table( @seedDB ) {
     
     $gen->pprint( -val => "Importing $table" );
-
-    # Process and import the file to the table
+    
+    # $options{ -t } is used to import specific tables
+    next if( defined $options{ -table } && $table ne $options{ -table } );
     
     import_file( -file => "data_${table}.psv",
 		 -table => $table );
@@ -115,24 +119,27 @@ sub import_file {
     my @header = @{ $data->{ header } };
     
     my $cnt = 0;
+    my $total = `more $param{ -file } | wc -l`; chomp $total;
+    $gen->pprogres_reset();
 
     # For each line within the files, we will generate an sql > then import this sql
     foreach( @{ $data->{ data } } ) {
-
+	print Dumper $_;
 	# Generating sql statement
-	my( $sql_insert, 
-	    $sql_value) = $mainDB->generate_sql( -table => $param{ -table },
-						 -data => $_ );;
-
-	# Importing the sql statement to the database
-	$mainDB->import_sql( -insert => $sql_insert,
-			     -value => $sql_value );
+	$mainDB->generate_sql( -table => $param{ -table },
+			       -data => $_,
+			       %options );
 	
-	# Simple counter
-	$cnt++ if( $options{ -v } );
-	print "$cnt\r" if( $options{ -v } );
+	$gen->pprogres( -total => $total );
+	
     }
-    print "\n" if( $options{ -v } );
+    print "\n";
+    
+    $gen->pprint( -val => "SQL Inserts..." );
+
+    # Importing the sql statement to the database
+    $mainDB->insert_sql( %param );
+
 }
 
 

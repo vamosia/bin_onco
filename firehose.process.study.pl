@@ -11,7 +11,7 @@ use Storable;
 my %options = ( -s => 'TCGA (2016_01_28)' );
 
 GetOptions( "d"      => \$options{ -d },
-	    "dd"     => \$optiosn{ -dd },
+	    "dd"     => \$options{ -dd },
 	    "v"      => \$options{ -v },
 	    "s=s"      => \$options{ -s }
     ) or die "Incorrect Options $0!\n";
@@ -142,7 +142,8 @@ sub generate_output {
     
     foreach my $uuid ( keys %{ $data } ) {
 	
-	$gen->pprint( -val => "UUID : $uuid", -level => 1 ) if( $options{ -v } );
+	$gen->pprint( -val => "UUID : $uuid", 
+		      -d => 1 );
 	$uuid_cnt ++;
 	
 	my $pid = $data->{ $uuid }{ 'patient' }{ 'stable_patient_id' };
@@ -182,7 +183,12 @@ sub generate_output {
 		# Print to sample file
 		my @line;   
 
+
+		# sample-2, sample-3, sample-4 might be 'NA'
+		# its 'NA', as by default it will look through all the samples
 		
+		next if( $data->{ $uuid }{ $cat }{ stable_sample_id } eq 'NA');
+		    
 		# Always use the sample header for sample (not sample-2 or sample-3)
 		# This ensure consistencies among all the samples are not all sample (sample-2, sample-3)
 		# will have the same header
@@ -194,7 +200,7 @@ sub generate_output {
 
 		    my $val = (defined $data->{ $uuid }{ $cat }{ lc($id) } ) ?
 			$data->{ $uuid }{ $cat }{ lc($id) } : 'NA';
-		    
+					    
 		    push( @line,  $val );
 		}
 		
@@ -369,6 +375,7 @@ sub process_patient_sample {
 
 	    # Capitalize 
 	    if( $header[3] eq 'stable_sample_id' ) {
+
 		$_ = uc for @line;
 	    }
 	    
@@ -438,8 +445,8 @@ sub store_to_data {
 
 	
 	# modify TCGA-OR-A5KP-01A to TCGA-OR-A5KP-01
-	if( $col1 =~ /stable_sample_id/ ) {
-
+	if( $col1 =~ /stable_sample_id/ && $val ne 'NA') {
+	    
 	    my @sid = split( /\-/, $val );
 
 	    splice( @sid, 4 );
