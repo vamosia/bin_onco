@@ -1,0 +1,1 @@
+sudo -u postgres psql $1 < /srv/alexb/bin/DB/maindb.psql.sql
