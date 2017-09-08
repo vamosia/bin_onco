@@ -7,13 +7,16 @@ use Data::Dumper;
 use Generic;
 use Getopt::Long;
 use Storable;
-
+use MainDB;
 my %options = ( -s => 'TCGA (2016_01_28)' );
 
 GetOptions( "d"      => \$options{ -d },
 	    "dd"     => \$options{ -dd },
+	    "ddd"    => \$options{ -ddd },
+	    "db=s"   => \$options{ -db },
 	    "v"      => \$options{ -v },
-	    "s=s"      => \$options{ -s }
+	    "s=s"    => \$options{ -s },
+	    "t=s"    => \$options{ -t },
     ) or die "Incorrect Options $0!\n";
 
  
@@ -47,31 +50,36 @@ my %map_key = ( 'cancer_study' => 'study_name',
 		'bcr_sample_barcode' => 'stable_sample_id' );
 
 
-my %header = ( 'study'         => [qw(STUDY_NAME SOURCE DESCRIPTION)],
-	       'cancer_study'  => [qw(STUDY_NAME CANCER_ID)],
-	       'patient'       => [qw(STABLE_PATIENT_ID STUDY_NAME)],
-	       'sample'        => [qw(STABLE_PATIENT_ID STABLE_SAMPLE_ID STUDY_NAME CANCER_ID)] );
+my %header = ( 'study'         => [qw(study_name source description)],
+	       'cancer_study'  => [qw(study_name cancer_id)],
+	       'patient'       => [qw(stable_patient_id study_name)],
+	       'sample'        => [qw(STABLE_PATIENT_ID STABLE_SAMPLE_ID CANCER_ID)] );
 
 my %header_meta;
 
 my $gen = new Generic( %options );
+my $mainDB = new MainDB( %options );
+my $db = $options{ -db };
+
+$gen->pprint( -level => 0, 
+	      -tag => $options{ -t },
+	      -val => 'Processing Patient Sample Files' );
+
+
+$mainDB->load_db_data( -table => 'study' );
+$mainDB->load_db_data( -table => 'patient' );
+$mainDB->load_db_data( -table => 'sample' );
 
 my %header_pm;
 my %header_sm;
 
 # cs = study_name
 my %data_s;
-my @header_s = qw(STUDY_NAME SOURCE DESCRIPTION);
 
-$gen->pprint( -level => 0, -val => 'Processing Patient Sample Files' );
 
 my $map_cancer_id = load_cancer_id();
 
-$gen->pprint( -val => "Processing Patient Samples" );
-
 my $data = process_patient_sample();
-
-$gen->pprint( -val => "Generating Output" );
 
 generate_output( $data );
 
@@ -82,176 +90,184 @@ sub generate_output {
 
     my $data = $_[0];
     
-    my @header_pm = sort keys %{ $header_meta{ patient } };
-    my @header_sm = sort keys %{ $header_meta{ sample } };
+    #my @header_pm = sort keys %{ $header_meta{ patient } };
+    #my @header_sm = sort keys %{ $header_meta{ sample } };
+
+    my $table = $options{ -t };
     
     # print header as upper case
-    $_ = uc for @header_pm;
-    
-    # move STABLE_PATIENT_ID to the index 0;
-    for( 0 ..$#header_pm ) {
-	if( $header_pm[$_] eq 'STABLE_PATIENT_ID' ) {
-	    my $pid = splice @header_pm, $_, 1;
-	    unshift( @header_pm, $pid );
-	}
-    }
-    
-    $_ = uc for @header_sm;
-    
-    # move STABLE_*_ID to the index 0;
-    for( 0 ..$#header_sm ) {
-	if( $header_sm[$_] eq 'STABLE_SAMPLE_ID' ) {
-	    my $pid = splice @header_sm, $_, 1;
-	    unshift( @header_sm, $pid );
+    # $_ = uc for @header_pm;
 
-	} elsif( $header_sm[$_] eq 'STABLE_PATIENT_ID' ) {
-	    my $pid = splice @header_sm, $_, 1;
-	    unshift( @header_sm, $pid );
-	}
-    }
-    
-    open( PATIENT, ">data_patient.txt" );
-    print PATIENT join( "\t", @{ $header{ patient } } ) . "\n";
+    open( OUT, ">data_${table}.tsv" );
 
-    open( PATIENT_META, ">data_patient_meta.txt" );
-    print PATIENT_META join( "\t", @header_pm ) . "\n";
-    
-    open( SAMPLE, ">data_sample.txt" );
-    print SAMPLE join( "\t", @{  $header{ sample } } ) . "\n";
-    
-    open( SAMPLE_META, ">data_sample_meta.txt" );
-    print SAMPLE_META join( "\t", @header_sm ) . "\n";
-
-    open( STUDY, ">data_study.txt" );
-    print STUDY join( "\t", @{ $header{ study } } ) . "\n";
-
-    open( CANCER_STUDY, ">data_cancer_study.txt" );
-    print CANCER_STUDY join( "\t", @{ $header{ cancer_study } } ) . "\n";
 
     # revert back to lower case, since the values in the hash are all lower case
-    $_ = lc for @header_pm;
-    $_ = lc for @header_sm;
-    $_ = lc for @header_s;
+#    $_ = lc for @header_pm;
+ #   $_ = lc for @header_sm;
+#    $_ = lc for @header_s;
 
 
-    $header_meta{ patient } = \@header_pm;
-    $header_meta{ sample } = \@header_sm;
+#    $header_meta{ patient } = \@header_pm;
+ #   $header_meta{ sample } = \@header_sm;
     
     # id = UUID
     my $uuid_cnt = 0;
     
     foreach my $uuid ( keys %{ $data } ) {
 	
-	$gen->pprint( -val => "UUID : $uuid", 
+	$gen->pprint( -tag => $options{ -t },
+		      -val => "UUID : $uuid", 
 		      -d => 1 );
 	$uuid_cnt ++;
 	
-	my $pid = $data->{ $uuid }{ 'patient' }{ 'stable_patient_id' };
+	my $spid = $data->{ $uuid }{ patient }{ stable_patient_id };
 
-	my $sn = $data->{ $uuid }{ 'patient' }{ 'study_name' };
+	my $sn = $data->{ $uuid }{ patient }{ study_name };
+
 	
 	# $cat = patient, sample, sample-2, sample-3
 	foreach my $cat ( sort keys %{ $data->{ $uuid } } ) { 
-	    
-	    if( $cat eq 'patient' ) {
 
-		# Print to patient file
-		my @line;
+	    my @line;
+
+	    # Print to patient file
+	    if( $cat eq 'patient' && $table eq 'patient' ) {
 		
 		foreach my $id( @{ $header{ $cat } } ) {
-		    push( @line, $data->{ $uuid }{ $cat }{ lc($id) } );
-		}
-		print PATIENT join( "\t", @line ),"\n";
-		
-
-		# Print to patient_meta file
-		@line = ();
-		
-		#foreach my $id ( @header_pm ) {
-		foreach my $id( @{ $header_meta{ $cat } } ) {
-		    $id = map_key( -id => $id );
-		    push( @line, $data->{ $uuid }{ $cat }{ $id } );
 		    
+		    my $val = $data->{ $uuid }{ $cat }{ lc($id) };
+		
+		    if( $id =~ /study_name/i ) {
+
+			$val = $mainDB->get_data( -id => $id, 
+						  -val => $val );
+		    }
+		    
+		    push( @line, $val );
 		}
 		
-		print PATIENT_META join( "\t", @line ), "\n";
+		# PATIENT
+		print OUT join( "\t", @line ),"\n";
+		
+	    } elsif( $cat eq 'patient' && $table eq 'patient_meta' ) {
+		
+		@line = ();
 
+		my $pid = $mainDB->get_data( -id => 'stable_patient_id',
+					     -val => $spid );
+		
+		foreach my $id( keys %{ $header_meta{ $cat } } ) {
+		    
+		    $id = map_key( -id => $id );
+		    
+		    my $val = $data->{ $uuid }{ $cat }{ $id };
+		    
+		    next if( $id =~ /stable_patient_id/i );
+		    
+		    print OUT "$pid\t$id\t$val\n";
+		}
 		# Store the study name into the sample hash
 		$data->{ $uuid }{ sample }{ study_name } = $data->{ $uuid }{ $cat }{ study_name };
-	    } elsif( $cat =~ /^sample/ ) {
-
-		# Print to sample file
-		my @line;   
-
-
-		# sample-2, sample-3, sample-4 might be 'NA'
-		# its 'NA', as by default it will look through all the samples
+		
+	    } elsif( $cat =~ /^sample/ && $table eq 'sample' ) {
 		
 		next if( $data->{ $uuid }{ $cat }{ stable_sample_id } eq 'NA');
-		    
+
 		# Always use the sample header for sample (not sample-2 or sample-3)
 		# This ensure consistencies among all the samples are not all sample (sample-2, sample-3)
 		# will have the same header
 		foreach my $id( @{ $header{ sample } } ) {
 
-		    $gen->pprint( -tag => 'SAMPLE',
+		    $gen->pprint( -tag => $options{ -t },
 				  -val => "$id >>>> $data->{ $uuid }{ $cat }{ lc($id) }",
 				  -d => 1 );
 
+		    # sample-2, sample-3, sample-4 might be 'NA'
+		    # its 'NA', as by default it will look through all the samples
+		    
 		    my $val = (defined $data->{ $uuid }{ $cat }{ lc($id) } ) ?
 			$data->{ $uuid }{ $cat }{ lc($id) } : 'NA';
-					    
+		    
+		    if( $id =~ /stable_patient_id/i ) {
+			
+			$val = $mainDB->get_data( -id => $id,
+						  -val => $val );
+		    }
+
 		    push( @line,  $val );
 		}
 		
-		print SAMPLE join( "\t", @line ),"\n";
+		print OUT join( "\t", @line ),"\n";
 
-		# Print to sample_meta file
-		@line = ();
+	    } elsif( $cat =~ /^sample/ && $table eq 'sample_meta' ) {
 
-		foreach my $id ( @header_sm ) {
+		my $sid = $mainDB->get_data( -id => 'stable_sample_id',
+					     -val => $data->{ $uuid }{ $cat }{ stable_sample_id } );
+
+		next unless (defined $sid );
+		
+		foreach my $id( keys %{ $header_meta{ $cat } } ) {
+		    
 		    $id = map_key( -id => $id );
-		    push( @line, $data->{ $uuid }{ $cat }{ $id } );
+		    
+		    my $val = $data->{ $uuid }{ $cat }{ $id } ;
+		    
+		    next if( $id =~ /stable_sample_id/i);
+		    
+		    print OUT "$sid\t$id\t$val\n";
 		}
 		
-		print SAMPLE_META join( "\t", @line ), "\n";						
 	    }
 	}
     }
-
-    $gen->pprint( -level => 1, 
+    
+    $gen->pprint( -tag => $options{ -t },
 		  -val => "Total Patient = $uuid_cnt" );
     
-    # Print to STUDY (data_study.txt) file
-    my @study_out;
-    my @cancer_study_out;
     
-    foreach my$cs ( keys %data_s ) {
-	foreach my $id (@header_s ) {
-	    my $val = (defined $data_s{ $cs }{ $id }) ?
-		$data_s{ $cs }{ $id } : 'NA';
+    if( $table eq 'study' || $table eq 'cancer_study' ) {
+	
+	
+	# Print to STUDY (data_study.txt) file
+	my @study_out;
+	my @cancer_study_out;
+	
+	foreach my$cs ( keys %data_s ) {
 	    
-	    push( @study_out, $val );
-	}
+	    foreach my $id ( @{ $header{ study } } ) {
 
-	foreach my $id ( @{ $header{ cancer_study } } ) {
+		my $val = (defined $data_s{ $cs }{ $id }) ? $data_s{ $cs }{ $id } : 'NA';
+		
+		push( @study_out, $val );
+	    }
 	    
-	    push( @cancer_study_out, $data_s{ $cs }{ lc($id) } );
-	}
+	    
+	    foreach my $id ( @{ $header{ cancer_study } } ) {
+		
+		my $val = $data_s{ $cs }{ lc($id) };
+		
+		if( $id =~ /study_name/i ) {
+		    
+		    $val = $mainDB->get_data( -id => $id,
+					      -val => $val );
+		}
+		
+		push( @cancer_study_out, $val );
+	    }
 
+	}
+	
+	if( $table eq 'study' ) {
+	 
+	    print OUT join( "\t", @study_out );
+	    
+	} elsif( $table eq 'cancer_study' ) {
+	    
+	    print OUT  join( "\t", @cancer_study_out );
+	}
     }
-
-    print STUDY join( "\t", @study_out );
     
-    print CANCER_STUDY join( "\t", @cancer_study_out );
-
-    close( PATIENT );
-    close( PATIENT_META );
-    close( SAMPLE );
-    close( SAMPLE_META );
-    close( STUDY );
-    close( CANCER_STUDY );
-
+    close( OUT );
 }
 
 sub map_key {
@@ -278,7 +294,8 @@ sub process_patient_sample {
     my @files = glob("*.clin.merged.txt");
     
     # there should only be one file, if not error out
-    $gen->pprint( id => 'error', -val => 'Multiple *.clin.merged.txt Found' ) if( $#files != 0 );
+    $gen->pprint( -id => 'error', 
+		  -val => 'Multiple *.clin.merged.txt Found' ) if( $#files != 0 );
 
     open( IN, "<$files[0]" ) or die "$!\n";					   
     
@@ -453,7 +470,7 @@ sub store_to_data {
 
 	    $val = join ("-",, @sid);
 
-	    $val =~ s/(.*)\w$/$1/;
+	    #$val =~ s/(.*)\w$/$1/;
 
 	}
 	

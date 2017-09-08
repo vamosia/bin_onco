@@ -21,11 +21,8 @@ my $gen;
 my %seen_entrez_map;
 my @many_sql;
 my %many_sql;
-my %gene_entrez;
-my %gene_hugo;
-my %gene_alias;
-my %table_sample;
-my %table_cnv;
+my %db_data;
+
 =head2 new
 
     Function : Creating new class
@@ -51,6 +48,8 @@ sub new {
     
     %options = %param;
 
+    $param{ -table } = "";
+    
     $gen = new Generic( %param );
     
     $db = $param{ -db };
@@ -61,61 +60,163 @@ sub new {
     
     $dbh = DBI->connect("dbi:Pg:dbname=$param{ -db };host=localhost;port=5432",'postgres','ionadmin',{AutoCommit=>0,RaiseError=>1,PrintError=>0});
 
-    load_dbtable();
-    
-    load_dbpriority();
 
-    load_gene();
-
-    load_gene_alias();
-
-    # Preload the sample and cnv into hash for importing these data
-    # this is done to optimize the import speed, otherwise will take too ling
-    if( $param{ -table } =~ /cnv/i ) {
-
-	$gen->pprint( -val => "Loading sample data" );
-	
-	# Load the sample data
-	my $sample = qq(sudo -i -u postgres psql $db -c  "\\copy (SELECT sample_id, stable_sample_id FROM sample) To '/tmp/sample.tsv' With DELIMITER E'\\t' CSV HEADER");
-
-	system( $sample );
-
-
-	my $r  = $gen->read_file( -file => '/tmp/sample.tsv',
-				  -delim => '\t');
-	
-	foreach my $line( @{ $r->{ data } } ) {
-
-	    my $stable_id = $line->{ stable_sample_id };
-
-	    my $sample_id = $line->{ sample_id };
-	    
-	    $table_sample{ $stable_id } = $sample_id;	    
-	}
-	
-	$gen->pprint( -val => "Loading cnv data" );
-	
-	my $cnv = qq(sudo -i -u postgres psql $db -c  "\\copy (SELECT * from cnv) To '/tmp/cnv.tsv' With DELIMITER E'\\t' CSV HEADER");
-	system( $cnv );
-		
-	$r  = $gen->read_file( -file => '/tmp/cnv.tsv',
-			       -delim => '\t');
-	
-	foreach my $line( @{ $r->{ data } } ) {
-	    my $cnv_id = $line->{ cnv_id };
-	    my $alt = $line->{ alteration };
-	    my $entrez = $line->{ entrez_gene_id };
-
-	    $table_cnv{ "${entrez}_${alt}" } = $cnv_id;
-	}
-    }
-    
     my $self = {};
     
     bless $self, $class;
     
     return $self;
 }
+
+sub load_db_data {
+
+    my( $class,
+	%param ) = @_;
+
+    my $table = $param{ -table };
+    my $pwd = `pwd`; chomp $pwd;
+    
+    my $out = "$pwd/db.${table}.tsv";
+    
+    $gen->pprint( -val => "Generating $table data" );
+    
+    my %query = ( 'study'      => "SELECT * from study",
+		  'patient'    => "SELECT patient_id, stable_patient_id FROM patient",
+		  'sample'     => "SELECT sample_id, stable_sample_id FROM SAMPLE",
+		  'gene'       => "SELECT entrez_gene_id, hugo_gene_symbol FROM gene",
+		  'gene_alias' => "SELECT gene_alias, entrez_gene_id FROM gene_alias",
+		  'variant'    => "SELECT variant_id, varkey FROM variant",
+		  'cnv'        => "SELECT cnv_id, entrez_gene_id, alteration FROM cnv" );
+
+
+    my $qq = qq(sudo -i -u postgres psql $db -c  "\\copy ($query{$table}) To '$out' With DELIMITER E'\\t' CSV HEADER");
+
+    system( $qq );
+    system( "sudo chown alexb.alexb $out" );
+    system( "sudo chmod 777 $out" );
+
+    # $gen->pprint( -val => "Loading $table data" );
+    
+    my $r  = $gen->read_file( -file => "$out",
+			      -delim => '\t');
+    
+    foreach my $line( @{ $r->{ data } } ) {
+
+	if( $table eq 'study' ) {
+	
+	    $db_data{ $table }{ $line->{study_name} } = $line->{ study_id }
+	
+	} elsif( $table eq 'patient' ) {
+
+	    $db_data{ $table }{ $line->{stable_patient_id} } = $line->{ patient_id }
+
+	} elsif( $table eq 'sample' ) {
+	    $db_data{ $table }{ $line->{stable_sample_id} } = $line->{ sample_id };
+
+	} elsif( $table eq 'gene' ) {
+	    $db_data{ $table }{ $line->{ entrez_gene_id } } = $line->{ hugo_gene_symbol };
+	    $db_data{ hugo }{ $line->{ hugo_gene_symbol } }= $line->{ entrez_gene_id };
+
+	} elsif( $table eq 'gene_alias' ) {
+
+	    $db_data{ $table }{ $line->{ gene_alias } } = $line->{ entrez_gene_id };
+
+	} elsif( $table eq "variant" ) {
+
+	    $db_data{ $table }{ $line->{ varkey } } = $line->{ variant_id };
+	} elsif( $table eq 'cnv' ) {
+	    
+	    my $entrez = $line->{ entrez_gene_id };
+	    
+	    my $alt = $line->{ alteration };
+	    
+	    $db_data{ $table }{ "${entrez}_${alt}" } = $line->{ cnv_id };
+	    
+	} else {
+	    print Dumper "ERROR TODO ENCOUTNERED";
+	    exit;
+	}
+    }
+    
+}
+
+
+sub get_data {
+    my( $class,
+	%param ) = @_;
+
+    my $id = $param{ -id };
+    my $val = $param{ -val };
+    my $ret;
+
+    if( $id =~ /study_name/i ) {
+
+	$ret = $db_data{ study }{ $val };
+	
+    } elsif( $id =~ /stable_patient_id/i ) {
+
+	$ret = $db_data{ patient }{ $val };
+	
+    } elsif( $id =~ /stable_sample_id/i ) {
+	
+	$ret = $db_data{ sample }{ $val };
+	
+    } elsif( $id =~ /varkey/i ) {
+
+	$ret = $db_data{ variant }{ $val };
+
+    } elsif( $id =~ /cnv_id/ ) {
+
+	$ret = $db_data{ cnv }{ $val };
+    }
+
+    return( $ret );
+    
+}
+
+sub load_cnv {
+    
+    $gen->pprint( -val => "Loading cnv data" );
+    
+    my $qq = qq(sudo -i -u postgres psql $db -c  "\\copy (SELECT * from cnv) To '/tmp/cnv.tsv' With DELIMITER E'\\t' CSV HEADER");
+
+    system( $qq );
+    
+    my $r  = $gen->read_file( -file => '/tmp/cnv.tsv',
+			      -delim => '\t');
+    
+    foreach my $line( @{ $r->{ data } } ) {
+
+	my $cnv_id = $line->{ cnv_id };
+	my $alt = $line->{ alteration };
+	my $entrez = $line->{ entrez_gene_id };
+	
+	$db_data{ cnv }{ "${entrez}_${alt}" } = $cnv_id;
+    }
+}
+
+sub load_sample {
+    
+    $gen->pprint( -val => "Loading sample data" );
+    
+    # Load the sample data
+    my $sample = qq(sudo -i -u postgres psql $db -c  "\\copy (SELECT sample_id, stable_sample_id FROM sample) To '/tmp/sample.tsv' With DELIMITER E'\\t' CSV HEADER");
+    
+    system( $sample );
+    
+    my $r = $gen->read_file( -file => '/tmp/sample.tsv',
+			     -delim => '\t');
+    
+    foreach my $line( @{ $r->{ data } } ) {
+	
+	my $stable_id = $line->{ stable_sample_id };
+	
+	my $sample_id = $line->{ sample_id };
+	
+	$db_data{ sample }{ $stable_id } = $sample_id;	    
+    }
+}
+
 
 sub load_gene {
 
@@ -141,8 +242,8 @@ sub load_gene {
 	# 0 enterz
 	# 1 hugo
 	
-	$gene_entrez{ $line[0] } = $line[1];
-	$gene_hugo{ $line[1] } = $line[0];
+	$db_data{ entrez }{ $line[0] } = $line[1];
+	$db_data{ hugo }{ $line[1] } = $line[0];
     }
 }
 
@@ -150,8 +251,6 @@ sub load_gene {
 sub load_gene_alias {
 
     $gen->pprint( -val => 'Loading Gene Alias' );
-
-	
     
     my $file = `echo \$DATAHUB/genome/hg19/entrez.gene_alias.csv`; chomp $file;
     
@@ -172,12 +271,12 @@ sub load_gene_alias {
 	# 0 enterz
 	# 1 hugo
 	
-	$gene_alias{ $line[1] } = $line[0];
+	$db_data{ gene_alias }{ $line[1] } = $line[0];
     }
     
     close( IN );
-    
 }
+
 =head2 load_db_priority
 
     Function : Load the priority to which the database table should be loaded
@@ -487,11 +586,11 @@ sub generate_sql {
 		my $stable_id = $data->{ Stable_Sample_Id };
 		
 		if( $col =~ /^cnv_id$/ ) {
-		    $val = $table_cnv{ "${entrez}_${alt}" };
+		    $val = $db_data{ cnv }{ "${entrez}_${alt}" };
 		    
 		} elsif( $col =~ /^sample_id$/ ) {
 
-		    $val = $table_sample{ $stable_id };
+		    $val = $db_data{ sample }{ $stable_id };
 		}
 		
 		
@@ -997,30 +1096,30 @@ sub get_entrez {
     
     my( $class,
 	%param ) = @_;
-    
+
     my $q_entrez = $param{ -entrez } || 0;
     my $q_hugo = $param{ -hugo };
     my $hugo = "NA";
     my $entrez = "NA";
     
     
-    if( exists $gene_entrez{ $q_entrez } ) {	
+    if( exists $db_data{ gene }{ $q_entrez } ) {	
 	$entrez = $q_entrez;
 	$hugo = $q_hugo;
-
-    } elsif( exists $gene_hugo{ $q_hugo } ) {
+	
+    } elsif( exists $db_data{ hugo }{ $q_hugo } ) {
 
 	# Check gene based on hugo
-	$entrez = $gene_hugo{ $q_hugo };
+	$entrez = $db_data{ hugo }{ $q_hugo };
 	$hugo = $q_hugo;
-	
-    } elsif( exists $gene_alias{ $q_hugo } ) {
 
-	# Check gene_alias based on hugo
-	$entrez = $gene_alias{ $q_hugo };
-	$hugo = $gene_entrez{ $entrez };
+    } elsif( exists $db_data{ gene_alias }{ $q_hugo } ) {
+
+	# Check db_data{ gene_alias } based on hugo
+	$entrez = $db_data{ gene_alias }{ $q_hugo };
+	$hugo = $db_data{ gene }{ $entrez };
     }
-
+    
     if( $entrez ne 'NA' &&
 	($q_entrez ne $entrez) && 
 	! exists $seen_entrez_map{ $q_hugo } ) {
@@ -1032,8 +1131,26 @@ sub get_entrez {
 		      -d => 1 );
     }
     
+
     return( $entrez );
 }
+
+sub get_hugo {
+    my( $class,
+	%param ) = @_;
+
+    my $entrez = $param{ -entrez };
+    my $ret = $param{ -hugo };
+   
+    if (exists $db_data{ gene }{ $entrez } ) {
+
+	$ret = $db_data{ gene }{ $entrez };
+
+    }
+    
+    return( $ret );
+}
+   
 
 =head2 load_db_priority
 

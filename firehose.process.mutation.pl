@@ -1,16 +1,17 @@
 #!/usr/bin/perl -w
 
 use Data::Dumper;
-
+use utf8;
 use strict;
 use warnings;
 use lib "/home/ionadmin/bin";
-
 use Data::Dumper;
-use Bio::Generic qw(read_file debug );
 use Generic;
 use Getopt::Long;
 use Storable;
+use MainDB;
+use Text::Unidecode;
+$| = 1;
 
 ( $#ARGV > -1 ) || die "
 
@@ -37,20 +38,42 @@ AUTHOR:
 
 
 # Get User Options
-my %options = ( -f => 'data_variant.txt',
+my %options = ( -f => 'data_variant.tsv',
 		-s => 'tcga' );
 
-my $pwd = `pwd`; chomp $pwd;
 
-GetOptions( 's=s'    => \$options{ -s },   # Source
+GetOptions( 'db=s'   => \$options{ -db },
 	    'd'      => \$options{ -d },   # Debug
+	    'dd'     => \$options{ -dd },
+	    'ddd'    => \$options{ -ddd },
+	    't=s'    => \$options{ -t },
+	    's=s'    => \$options{ -s },   # Source
 	    'v'      => \$options{ -v },   # Verbose
 	    'sm'     => \$options{ -sm }
-
-	    
     ) or die "Incorrect Options $0!\n";
 
-my $merge_file = "$options{ -f }.merge";
+unless( defined $options{ -db } ) {
+    print "-db Required\n"; exit;
+}
+
+unless( defined $options{ -t } ) {
+    print" -t Required\n"; exit;
+}
+
+my $gen = new Generic( %options );
+my $mainDB = new MainDB( %options );
+my $pwd = `pwd`; chomp $pwd;
+my $merge_file = "data_variant.tsv.merge";
+my $table = $options{ -t };
+my %data;
+
+
+$mainDB->load_db_data( -table => 'gene' );
+$mainDB->load_db_data( -table => 'gene_alias' );
+$mainDB->load_db_data( -table => 'variant' );
+$mainDB->load_db_data( -table => 'sample' );
+
+
 
 # Load specific columns that needs to be remap
 my %map = ( 'Tumor_Sample_Barcode' => 'Stable_Sample_Id',
@@ -62,23 +85,20 @@ my %map = ( 'Tumor_Sample_Barcode' => 'Stable_Sample_Id',
 	    'Start_position' => 'Start_Position',
 	    'End_position' => 'End_Position' );
 
-my %header = ( 'variant' => [ 'Tumor_Sample_Barcode',
-			      'VarKey',
-			      'Hugo_Symbol',
+my %header = ( 'variant' => [ 'VarKey',
 			      'Entrez_Gene_Id',
-			      'Chromosome',
+			      'Chromosome',			      
 			      'Start_position',
 			      'End_position',
 			      'Reference_Allele',,
-			      'Tumor_Seq_Allele1',
 			      'Tumor_Seq_Allele2',
 			      'NCBI_Build',
 			      'Strand' ],
-
-	       'variant_meta' => [ 'VarKey' ],
 	       
 	       'variant_sample' => [ 'VarKey',
 				     'Tumor_Sample_Barcode' ],
+
+	       'variant_meta' => [ 'VarKey' ],
 	       
 	       'variant_sample_meta' => [ 'VarKey',
 					  'Tumor_Sample_Barcode',
@@ -101,6 +121,15 @@ my %header = ( 'variant' => [ 'Tumor_Sample_Barcode',
 					  'Sequencer',
 					  'Tumor_Sample_UUID',
 					  'Matched_Norm_Sample_UUID',
+					  'Other_Transcripts',
+					  # BLCA
+					  'i_t_alt_count_full',
+					  'i_t_ref_count_full',
+					  'pox_cutoff',
+					  't_alt_count',
+					  't_ref_count',
+					  
+					  
 					  'i_NTotCov',
 					  'i_NVarCov',
 					  'i_TTotCov',
@@ -114,11 +143,8 @@ my %header = ( 'variant' => [ 'Tumor_Sample_Barcode',
 # Create a hash for var_sample_meta. Needed later on to make sure these values
 # are not generated to the variant_meta
 
-
-
 my %var_sample_meta = map{ $_ => 1 } @{ $header{ variant_sample_meta } };
 
-my $gen = new Generic( %options );
 
 # Merge the multiple maf from firehose into one file
 merge_files() unless( $options{ -sm } );
@@ -126,34 +152,11 @@ merge_files() unless( $options{ -sm } );
 # Process the merged file
 process_mutation();
 
+    
+
 ############################################
 #
 # SUBROUTINE
-
-sub load_meta_mapping {
-
-    my $file = `echo \$DATAHUB/firehose/maindb.mapping.csv`; chomp $file;
-    
-    open( IN, "<$file" );
-    my $header = 0;
-    my @header;
-    while( <IN> ) {
-
-	chomp $_;
-
-	if( $header == 0 ) {
-	    @header = split( /\t/, $_ );
-	    $header++;
-	    next;
-	}
-
-	my @l = split( /\t/, $_ );
-	@map{ @header } = @l;
-    }
-    
-    close( IN );
-    
-}
 
 =head2 process_mutation
 
@@ -171,42 +174,23 @@ sub process_mutation {
     
     $gen->pprint( -val => "Processing $pwd/$merge_file" );
     
-
     my $total = `more $merge_file | wc -l`; chomp $total;
-    
+
     my $header = 0;
     my @header;
     my %data;
     my @join;
-
     my %fh;
 
-    foreach ( keys %header ) {
-	# Create file handler
-	open( $fh{ $_ }, '>', "data_${_}.txt" ) or die "!\n";
-
-	my @join;
-
-	# For each file handler generate its header
-	foreach my $id( @{ $header{ $_ } } ) {
-	    
-	    my $val = (exists $map{ $id })? $map{ $id } : $id;
-	    
-	    push( @join, $val);
-	}
-	
-	$fh{$_}->print( join ("\t", @join ) );
-	
-
-	# Dont print line break for variant_meta, as we'll need to appeded various header based on the file
-	if ($_ =~ /meta/) {
-	    $fh{$_}->print( "\t" );
-	} else {
-	    $fh{$_}->print( "\n" ) ;
-	}
-    }
-
+    open( OUT, ">data_$options{-t}.tsv" ) or die "!\n";
     open( IN, "<$merge_file" ) or die "$!\n";
+
+    # variant header
+    my %header_v = map{ $_ => undef } @{ $header{ variant} };
+
+    # variant_sample_header
+    my %header_vsm = map{ $_ => undef } @{ $header{ variant_sample_meta} };
+    
     
     while( <IN> ) {
 
@@ -217,130 +201,179 @@ sub process_mutation {
 	my @join_var_meta;
 	my @join_var_sample_meta;
 	
-	# Process header
+	# Need to store the header to generate meta file
 	if( $header == 0 ) {
 	
 	    @header = split( /\t/, $_ );
-	    
+
 	    push( @join, "VarKey" );
 	    
 	    # Map the header as needed
 	    foreach( 0 ..$#header ) {
-
+		
 		my $col = $header[$_];
-		
-		# If it exists in var_sample_meta, means we don't want to print it to var_meta
-		next if ( exists $var_sample_meta{ $col } );
-				
-		push( @{ $header{ variant_meta } }, $col );
 
-		my $val = (exists $map{ $col } ) ? $map{ $col } : $col;
+		if( $table eq 'variant_meta' ) {
 		
-		push( @join_var_meta, $val );
-		
-		# Everything that has "i_" and not already in variant_sample_meta header
-		if( $col =~ /^i_/ ) {
-
-		    push( @join_var_sample_meta, $val );
+		    # Skip header from variant table or variant_sampleMeta
+		    next if( exists $header_v{ $col } ||
+			     exists $header_vsm{ $col } ||
+			     $col eq 'Hugo_Symbol' );
 		    
-		    push( @{ $header{ variant_sample_meta } }, $col );
+			push( @{ $header{ variant_meta } }, $col );
+		    
+		    my $val = (exists $map{ $col } ) ? $map{ $col } : $col;
+		    
+		    push( @join_var_meta, $val );
+		}
+
+		if ($table eq 'variant_sample_meta' ) {
+		    
+#		    # Everything that has "i_" and not already in variant_sample_meta header
+#		    if( $col =~ /^i_/ ) {
+#			
+#			push( @join_var_sample_meta, $val );
+#			
+#			push( @{ $header{ variant_sample_meta } }, $col );
+#		    }
 		}
 	    }
-	    
-	    # print header for var_meta
-	    $fh{ variant_meta }->print( join( "\t", @join_var_meta ) . "\n" );
-	    $fh{ variant_sample_meta }->print( join( "\t", @join_var_sample_meta) . "\n" );
 
+	    # print header for var_meta
+	    #$fh{ variant_meta }->print( join( "\t", @join_var_meta ) . "\n" );
+	    #$fh{ variant_sample_meta }->print( join( "\t", @join_var_sample_meta) . "\n" );
 	    $header++;
 	    
 	    next;
 	}
-	
 
 	# Process non header
-	my @line = split( /\t/, $_ );
-	
-	@data{ @header } = @line;
+	my %line;
+	@line{ @header } = split( /\t/, $_ );
+	my @l = split( /\t/, $_ );
 
 	# Check for consitency
-	my $check = check_fix_data( \%data );
+	my $check = check_fix_line( \%line );
 
 	next if( $check );
 
-	# Fore each header, we will generate its value 
-	foreach (keys %header) {
-	    my @join;
+	my $varkey  = sprintf "%s_%s_%s_%s", $line{ Chromosome } || 'NA',
+	                                     $line{ Start_position } || 'NA',
+	                                     $line{ Reference_Allele } || 'NA',
+	                                     $line{ Tumor_Seq_Allele2 } || 'NA';
+
+	my (@join, $variant_id, $sid);
+
+	if( $table ne 'variant' ) {
 	    
-	    foreach my $id( @{ $header{$_} } ) {
-		my $val;
-		
-		if( $id eq 'VarKey' ) {
-		    $val  = sprintf "%s_%s_%s_%s", $data{ Chromosome } || 'NA',
-		    $data{ Start_position } || 'NA',
-		    $data{ Reference_Allele } || 'NA',
-		    $data{ Tumor_Seq_Allele2 } || 'NA';
-		    
-		} else {
-		    
-		    $val = (defined $data{ $id } ) ? $data{ $id } : 'NA'
-		}
+	    $variant_id = $mainDB->get_data( -id => 'varkey',
+					     -val => $varkey );
+	    unless( defined $variant_id ) {
+		$gen->pprint( -tag => "ERROR",
+			      -val => "VarKey ($varkey) not yet defined in DB" );
+	    }
+	    
+	    $sid = $mainDB->get_data( -id => 'stable_sample_id',
+				      -val => $line{ Tumor_Sample_Barcode } );
+							  
+	}
+
+	if( $table eq 'variant_meta') {
+	    $data{ $table }{ $variant_id } = $_;
+
+	} elsif( $table eq 'variant' ) {
+	    foreach my $id( @{ $header{ $table } } ) {
+
+		my $val = $line{ $id };
+
+		$val = 'null' unless( defined $val );
 		
 		$val =~ s/\"//g;
+
+		if( $id =~ /varkey/i ) {
+		    $val = $varkey;
+		} elsif( $id =~ /tumor_sample_barcode/i ) {
+		    $val = $sid;
+		}
 		
-		push( @join, $val );
-	    }	
-	    $fh{ $_ }->print( join( "\t", @join) . "\n" );
-	}
-   
-	
-	# # Generate data_variant.txt
-	# foreach my $id( @{ $header{ 'variant' } } ) {
-	#     my $val;
-
-	#     # VarKey need to be added, as this is an internal way of looking up
-	#     # variants. ex chr1_23231_G_A
+		if( $table eq 'variant') {
+		    
+		    # VarKey is actually the hash key don't need it
+		    next if( $id =~ /varkey/i );
+		    
+		    # store to array > then to hash to avoid duplicate
+		    push( @join, $val );		
+		    
+		}
+	    }
 	    
-	#     if( $id eq 'VarKey' ) {
-
-	# 	$val  = sprintf "%s_%s_%s_%s", $data{ Chromosome } || 'NA',
-	# 	                               $data{ Start_position } || 'NA',
-	# 	                               $data{ Reference_Allele } || 'NA',
-	# 	                               $data{ Tumor_Seq_Allele2 } || 'NA';
-		
-	#     } else {
-	# 	$val = (defined $data{ $id } ) ? $data{ $id } : 'NA'
-	#     }
+	    # Store to hash to avoid duplicates;
+	    $data{ $table }{ $varkey } = join( "\t", @join );
 	    
-	#     push( @join, $val );
-	# }
-	
-	# $fh{ variant }->print( join( "\t", @join ) . "\n" );
-	
-	# # Generate data_variant_meta.txt
-	# @join = ();
-	
-	# foreach ( @header ) {
-	#     my $val = (defined $data{ $_ } ) ? $data{ $_ } : 'NA';
-
-	#     # Remove quotes
-	#     $val =~ s/\"//g;
-
-	#     push( @join, $val );
-	# }
-	
-	# print _META join( "\t", @join ) . "\n";
-
+	} elsif( $table eq 'variant_sample' ) {
+	    
+	    print OUT "$sid\t$variant_id\n";
+	}	    
+	       
 	# print counters
 	$gen->pprogres( -total => $total,
 			-v => 1 );
-	
     }
     
     print "\n" if( $options{ -v } );
+
+    $gen->pprint( -val => "Printing to disk" );
     
-    foreach( keys %header ) {
-	$fh{ $_ }->close();
+    $total = keys %{ $data{ $table } };
+    
+    $gen->pprogres_reset();
+    
+    if( $table eq 'variant' ) {
+	
+	while( my( $var_key, $value ) = each ( %{ $data{ $table } } ) ) {
+	    
+	    print OUT "$var_key\t$value\n";
+	    
+	    $gen->pprogres( -total => $total,
+			    -v => 1 );
+	}
+	
+    } elsif( $table eq 'variant_meta' ) {
+	
+	while( my( $variant_id, $line ) = each ( %{ $data{ $table } } )) {
+	    
+	    $gen->pprogres( -total => $total,
+			    -v => 1 );
+	    
+	    my @line = split( /\t/, $line );
+	    
+	    foreach my $idx (0 .. $#header ) {
+		
+		my $col = $header[$idx];
+		my $val = $line[$idx];
+		
+		# Skip header from variant table or variant_sampleMeta
+		next if( ! defined $val ||
+			 $val eq '' ||
+			 exists $header_v{ $col } ||
+			 exists $header_vsm{ $col } ||
+			 $col eq 'Hugo_Symbol' );
+		
+		$val =~ s/\'/\'\'/g;
+		$val =~ s/\"//g;
+		$val =~ s/Marinesco-Sj.gren_syndrome/Marinesco-Sjogren_syndrome/g;
+		$val =~ tr/ö/o/s;
+		$val =~ tr/é/e/s;
+		# icon': iconv -f ISO-8859-1 -t UTF-8 data_variant.tsv.merge 
+		print OUT unidecode("$variant_id\t$col\t$val\n");
+	    }
+	}
     }
+    
+    print "\n" if ( $options{ -v } );
+    
+    close( OUT );
+    close( IN );
 }
 
 =head2 map_key
@@ -425,69 +458,113 @@ sub merge_files {
 	    } else {
 		print OUT $_,"\n";
 	    }
-
-	    
 	}
-	
-	close( IN );
-	
-
     }
-
+    
     closedir(DIR);
-
-
+    close( IN );
     close( OUT );
 
 }
 
-sub check_fix_data {
+# REturn 1 to skip
+sub check_fix_line {
 
     my $ret = 0;
-    my $data = $_[0];
+    my $line = $_[0];
 
     
     # Reference_Allele should always equal Tumor_Seq_Allele1
     #
     # Line Contain
     # Reference_Allele    Tumor_Seq_Allele1    Tumo_Seq_Allele2
+    if( $line->{ Reference_Allele } ne $line->{ Tumor_Seq_Allele1 } ) {
 
-    if( $data->{ Reference_Allele } ne $data->{ Tumor_Seq_Allele1 } ) {
-	print Dumper $data;
 	$gen->pprint( -tag => 'ERROR', 
-		      -val => "$data->{ Reference_Allele } != $data->{ Tumor_Seq_Allele1 }" );
+		      -val => "Inconsistency Allele : $line->{ Reference_Allele } != $line->{ Tumor_Seq_Allele1 }" );
     }
-
     
-    # Add GRCh to the number
+    if( defined $line->{ i_entrez_gene_id } &&
+	defined $line->{ i_Entrez_Gene_Id} &&
+	$line->{ i_entrez_gene_id } ne "" &&
+	( $line->{ i_entrez_gene_id } ne $line->{ i_Entrez_Gene_Id }) ) {
+
+	$gen->pprint( -tag => 'WARNING',
+		      -val => "Inconsistency Entrez : ($line->{ Hugo_Symbol }) $line->{ i_Entrez_Gene_Id } != $line->{ i_entrez_gene_id }",
+		      -d => 1 );
+  
+    }
+    
+    # ADD GRCh to the number
     # if reference genome contains digits, if not generate an error
-    if( $data->{ NCBI_Build } =~ /^\d+$/ ) {
-	$data->{ NCBI_Build } = "GRCh" . $data->{ NCBI_Build };
+    if( $line->{ NCBI_Build } =~ /^\d+$/ ) {
+	$line->{ NCBI_Build } = "GRCh" . $line->{ NCBI_Build };
     } else {
 	$gen->pprint( -tag => 'ERROR',
-		      -val => "NCBI_Build : $data->{ NCBI_Build }" );
+		      -val => "NCBI_Build : $line->{ NCBI_Build }" );
     }
     
-    # Fix stable id
+    # FIX stable id
     # from TCGA-OR-A5KP-10A-01D-A30A-10 to TCGA-OR-A5KP-10
-    
-    # fix stable sample_id
-
-    my $sid = $data->{ Tumor_Sample_Barcode };
+    my $sid = $line->{ Tumor_Sample_Barcode };
     my @sid = split( /\-/, $sid );
-    splice( @sid, -3 );
-    $data->{ Tumor_Sample_Barcode } = join( "-", @sid );
-    $data->{ Tumor_Sample_Barcode } =~ s/(.*)\w$/$1/;
+    splice( @sid, 4 );
+    $line->{ Tumor_Sample_Barcode } = join( "-", @sid );
 
-    # fix Matched_Norm_Sample_Barcode
-    $sid = $data->{ Matched_Norm_Sample_Barcode };
+    # FIX Matched_Norm_Sample_Barcode
+    $sid = $line->{ Matched_Norm_Sample_Barcode };
     @sid = split( /\-/, $sid );
-    splice( @sid, -3 );
-    $data->{ Matched_Norm_Sample_Barcode } = join( "-", @sid );
-
-    # Check to see if ENTREZ_GENE_ID is NA, we'll need to skip these
-    $ret = 1 if( $data->{ Entrez_Gene_Id } == 0 );
-	
-    return( $ret );
+    splice( @sid, 4 );
+    $line->{ Matched_Norm_Sample_Barcode } = join( "-", @sid );
     
+
+    # CHECK entrez_gene_id == i_Entrez_Gene_Id
+    if( $line->{ Entrez_Gene_Id } != $line->{ i_Entrez_Gene_Id } ) {
+	
+	my $msg = sprintf "Inconsistency : 'Entrez_Gene_Id' != 'i_Entrez_Gene_Id' : (%s %s != %s)",
+	                  $line->{ Hugo_Symbol },
+	                  $line->{ Entrez_Gene_Id },
+	                  $line->{ i_Entrez_Gene_Id };
+	
+	$gen->pprint( -val => $msg,
+		      -tag => "WARNING",
+		      -dd => 1 );
+    }
+    
+    
+    # CHECK entrez_gene_id
+    if( ! defined $line->{ Entrez_Gene_Id } || $line->{ Entrez_Gene_Id } == 0 ) {
+
+	$ret = 1;
+
+    } else {
+	
+	my $entrez = $mainDB->get_entrez( -entrez => $line->{ Entrez_Gene_Id },
+					  -hugo => $line->{ Hugo_Symbol } );
+
+	if( $entrez eq 'NA' ) {
+	    
+	    $gen->pprint( -tag => "WARNING",
+			  -val => "Unknown Entrez $line->{Hugo_Symbol} ($line->{Entrez_Gene_Id})" );
+	    $ret = 1;
+	} else {
+	    
+	    if( $entrez ne $line->{ Entrez_Gene_Id } ) {
+		
+		my $hugo = $mainDB->get_hugo( -entrez => $entrez,
+					      -hugo => $line->{ Hugo_Symbol } );
+		
+		$gen->pprint( -tag => "ENTREZ_MAP",
+			      -val => "$line->{Hugo_Symbol} ($line->{Entrez_Gene_Id}) > $hugo ($entrez)" );
+
+		$line->{ Entrez_Gene_Id } = $entrez;
+		
+		$line->{ Hugo_Gene_Symbol } = $hugo;
+		
+	    }
+	}
+    }
+
+    return( $ret  );
 }
+
