@@ -7,6 +7,12 @@ then
     exit;
 fi;
 
+
+#firehose.process.cna.pl  -db $1 -t cnv_sample
+#sudo -i -u postgres psql $1 -c "
+#copy cnv_sample(sample_id, cnv_id) FROM '$PWD/data_cnv_sample.tsv' using DELIMITERS E'\t'";
+#exit;
+
 sudo -i -u postgres psql test2 -c "truncate table study cascade;"
 
 firehose.process.study.pl -v  -db $1 -t study;
@@ -29,12 +35,9 @@ firehose.process.study.pl -v -db $1 -t sample
 sudo -i -u postgres psql $1 -c "
 copy sample(patient_id, stable_sample_id, cancer_id) FROM '$PWD/data_sample.tsv' using DELIMITERS E'\t';"
 
-
 firehose.process.study.pl -v -db $1 -t sample_meta
 sudo -i -u postgres psql $1 -c "
 copy sample_meta(sample_id, attr_id, attr_value) FROM '$PWD/data_sample_meta.tsv' using DELIMITERS E'\t';"
-
-exit;
 
 firehose.process.mutation.pl -v -db $1 -t variant
 sudo -i -u postgres psql $1 -c "
@@ -47,3 +50,7 @@ copy variant_meta(variant_id, attr_id, attr_value) FROM '$PWD/data_variant_meta.
 firehose.process.mutation.pl -v -db $1 -sm -t variant_sample
 sudo -i -u postgres psql $1 -c "
 copy variant_sample(sample_id, variant_id) FROM '$PWD/data_variant_sample.tsv' using DELIMITERS E'\t'";
+
+firehose.process.cna.pl -v -db $1 -t cnv_sample
+sudo -i -u postgres psql $1 -c "
+copy cnv_sample(sample_id, cnv_id) FROM '$PWD/data_cnv_sample.tsv' using DELIMITERS E'\t'";

@@ -1,1 +1,0 @@
-firehose.import.pl -db test -c -v -t study;

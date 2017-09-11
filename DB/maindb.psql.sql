@@ -523,7 +523,11 @@ CREATE TABLE IF NOT EXISTS public.analysis (
     ON UPDATE NO ACTION);
 
 ALTER TABLE public.analysis
-  ADD CONSTRAINT analysis_uniq UNIQUE(study_id, sample_id, name);
+  ADD CONSTRAINT analysis_uniq_study_name UNIQUE(study_id, name);
+
+ALTER TABLE public.analysis
+  ADD CONSTRAINT analysis_uniq_study_sample_name UNIQUE(study_id, sample_id, name);
+
 -- -----------------------------------------------------
 -- Table public.analysis_data
 -- -----------------------------------------------------

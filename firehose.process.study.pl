@@ -63,12 +63,13 @@ my $db = $options{ -db };
 
 $gen->pprint( -level => 0, 
 	      -tag => $options{ -t },
-	      -val => 'Processing Patient Sample Files' );
+	      -val => "Loading $options{ -t }" );
 
 
 $mainDB->load_db_data( -table => 'study' );
 $mainDB->load_db_data( -table => 'patient' );
 $mainDB->load_db_data( -table => 'sample' );
+$mainDB->load_db_data( -table => 'cancer_study' );
 
 my %header_pm;
 my %header_sm;
@@ -77,7 +78,6 @@ my %header_sm;
 my %data_s;
 
 
-my $map_cancer_id = load_cancer_id();
 
 my $data = process_patient_sample();
 
@@ -90,26 +90,9 @@ sub generate_output {
 
     my $data = $_[0];
     
-    #my @header_pm = sort keys %{ $header_meta{ patient } };
-    #my @header_sm = sort keys %{ $header_meta{ sample } };
-
     my $table = $options{ -t };
     
-    # print header as upper case
-    # $_ = uc for @header_pm;
-
     open( OUT, ">data_${table}.tsv" );
-
-
-    # revert back to lower case, since the values in the hash are all lower case
-#    $_ = lc for @header_pm;
- #   $_ = lc for @header_sm;
-#    $_ = lc for @header_s;
-
-
-#    $header_meta{ patient } = \@header_pm;
- #   $header_meta{ sample } = \@header_sm;
-    
     # id = UUID
     my $uuid_cnt = 0;
     
@@ -136,17 +119,16 @@ sub generate_output {
 		foreach my $id( @{ $header{ $cat } } ) {
 		    
 		    my $val = $data->{ $uuid }{ $cat }{ lc($id) };
-		
+		    
 		    if( $id =~ /study_name/i ) {
 
 			$val = $mainDB->get_data( -id => $id, 
 						  -val => $val );
 		    }
-		    
 		    push( @line, $val );
+		 
 		}
-		
-		# PATIENT
+
 		print OUT join( "\t", @line ),"\n";
 		
 	    } elsif( $cat eq 'patient' && $table eq 'patient_meta' ) {
@@ -162,26 +144,25 @@ sub generate_output {
 		    
 		    my $val = $data->{ $uuid }{ $cat }{ $id };
 		    
-		    next if( $id =~ /stable_patient_id/i );
+		    next if( $id =~ /stable_patient_id/i ||
+			     ! defined $val );
 		    
 		    print OUT "$pid\t$id\t$val\n";
+		    
 		}
 		# Store the study name into the sample hash
 		$data->{ $uuid }{ sample }{ study_name } = $data->{ $uuid }{ $cat }{ study_name };
-		
+	    
 	    } elsif( $cat =~ /^sample/ && $table eq 'sample' ) {
-		
+	    
 		next if( $data->{ $uuid }{ $cat }{ stable_sample_id } eq 'NA');
-
+		
 		# Always use the sample header for sample (not sample-2 or sample-3)
 		# This ensure consistencies among all the samples are not all sample (sample-2, sample-3)
 		# will have the same header
+
 		foreach my $id( @{ $header{ sample } } ) {
-
-		    $gen->pprint( -tag => $options{ -t },
-				  -val => "$id >>>> $data->{ $uuid }{ $cat }{ lc($id) }",
-				  -d => 1 );
-
+		    
 		    # sample-2, sample-3, sample-4 might be 'NA'
 		    # its 'NA', as by default it will look through all the samples
 		    
@@ -194,6 +175,12 @@ sub generate_output {
 						  -val => $val );
 		    }
 
+		    next if( $val eq 'NA' );
+
+		    $gen->pprint( -tag => $options{ -t },
+				  -val => "$id >>>> $val",
+				  -d => 1 );
+		    
 		    push( @line,  $val );
 		}
 		
@@ -212,7 +199,8 @@ sub generate_output {
 		    
 		    my $val = $data->{ $uuid }{ $cat }{ $id } ;
 		    
-		    next if( $id =~ /stable_sample_id/i);
+		    next if( $id =~ /stable_sample_id/i ||
+			     ! defined $val );
 		    
 		    print OUT "$sid\t$id\t$val\n";
 		}
@@ -225,7 +213,7 @@ sub generate_output {
 		  -val => "Total Patient = $uuid_cnt" );
     
     
-    if( $table eq 'study' || $table eq 'cancer_study' ) {
+    if( $table eq 'study') {
 	
 	
 	# Print to STUDY (data_study.txt) file
@@ -241,32 +229,28 @@ sub generate_output {
 		push( @study_out, $val );
 	    }
 	    
-	    
-	    foreach my $id ( @{ $header{ cancer_study } } ) {
-		
-		my $val = $data_s{ $cs }{ lc($id) };
-		
-		if( $id =~ /study_name/i ) {
-		    
-		    $val = $mainDB->get_data( -id => $id,
-					      -val => $val );
-		}
-		
-		push( @cancer_study_out, $val );
-	    }
 
-	}
-	
-	if( $table eq 'study' ) {
-	 
 	    print OUT join( "\t", @study_out );
 	    
-	} elsif( $table eq 'cancer_study' ) {
-	    
-	    print OUT  join( "\t", @cancer_study_out );
 	}
     }
-    
+
+    if( $table eq 'cancer_study' ) {
+
+	foreach my$cs ( keys %data_s ) {
+	    
+	    my $study_name = $mainDB->get_data( -id => 'study_name',
+						-val => $data_s{ $cs }{ study_name } );
+	    
+	    my $cancer_id = $mainDB->get_data( -id  => 'cancer_id',
+					       -val => $data_s{ $cs }{ cancer_id } );
+	    
+	    foreach( split( ',', $cancer_id ) ) {
+		print OUT "$study_name\t$_\n";
+	    }
+	    
+	}
+    }
     close( OUT );
 }
 
@@ -289,6 +273,9 @@ sub map_key {
     
 }
 
+# Loads the data from *clin.merged.txt into a hash data structure.
+# The file is formated in something like admin.patient.patient-2.sample.etc...
+
 sub process_patient_sample {
 
     my @files = glob("*.clin.merged.txt");
@@ -300,69 +287,116 @@ sub process_patient_sample {
     open( IN, "<$files[0]" ) or die "$!\n";					   
     
     my %data;
-    my @disease_code;
-    my @key;
-    my @patient_list;
+    my (@disease_code, @study_name, @cancer_id, @key, @patient_list);
+    my ($study_name, $merge_code );
     my %added;
 	
     while( <IN> ) {
+
 	chomp $_;
 	
 	my @line = split( /\t/ );
 
 	my @header = split( /\./, $line[0] );
-
+	# remove first index, this is stored in header
 	#admin.batch_number     304.62.0        313.56.0;
-	shift @line; # remove first index, this is stored in header
+	shift @line; 
 
 	# Map the header as needed
 	foreach( 0 ..$#header ) {
 	    $header[$_] = map_key( -id => $header[$_] );
 	}
-
-	# Need to store disease code line, since we have not encountered the key yet
+	
 	if( $header[0] eq 'admin' ) {
-	    @disease_code = @line if( $header[1] eq 'disease_code' );
 
+	    # Need to store disease code line, since we have not encountered the key yet
+	    if( $header[1] eq 'disease_code' ) {
+		
+		@disease_code = @line;
+
+		# GENERATE STUDY_NAME ARRAY;
+
+		# From the list of disease code determine the uniq hash
+		my %uniq = map{ $_ => "" } @disease_code;
+		
+		my @uniq = sort keys %uniq; # convert back to array
+		
+		$merge_code = join( ",", @uniq ); # get comma seperated code
+
+		# Map disease code to study name ---> There should only be 1 study_name
+		$study_name = $mainDB->get_data( -id => 'disease_to_study_name',
+						 -val => $merge_code );
+
+		unless( defined $study_name ) {
+		    $gen->pprint( -tag => 'error',
+				  -val => "Unknown study for '$merge_code', please update \$DATAHUB/mainDB.seeDB/disease_code_to_cancer_id.tsv" )
+		}
+		
+		foreach( @disease_code ) {
+		    # add 'tcga' to the disaese code to make the study_name
+		    push( @study_name, $study_name );
+		}
+		
+	    }
+	    
+	    # Start processing the file once we encounter UUID
 	    if( $header[1] eq 'file_uuid' ) {
 		@key = @line; # store the column key used in the data hash
 		
+		# CHECK OF 'NA' UUID > MAKE IT UNIQ
+		for my $idx ( 0 ..$#key ) {
+		    
+		    my $code = $key[ $idx ];
+		    
+		    if( $code eq 'NA' ) {
+
+			$code = "${code}_${idx}";
+			
+			$gen->pprint( -tag => "WARNING",
+				      -val => "UUID: NA found. Setting to $code",
+				      -v => 1 );
+			    
+			    $key[ $idx ] = $code;
+		    }	
+		}
+
 		# initialize UUID
 		$data{ $_ } = undef foreach( @key );
 
-		# add 'tcga' to the disaese code to make the study_name
-		my @study_name = @disease_code;
-
- 		$_ = "${_}_tcga" for @study_name;
-		
 		# ADD TO HASH : the study_name tag to the patient hash
 		store_to_data( -col0 => 'patient',
 			       -col1 => 'study_name',
 			       -key => \@key,
 			       -data => \%data, 
 			       -line => \@study_name );
-		
-		
-		# ADD TO HASH : Study_Name
-		foreach( @disease_code ) {
-		    $data_s{ $_ . "_tcga" }{ 'source' } = $options{ -s };
-		    $data_s{ $_ . "_tcga" }{ 'description' } = $map_cancer_id->{ $_ }{ 'description' };
-		    $data_s{ $_ . "_tcga" }{ 'study_name' } = $_ . "_tcga";
-		    $data_s{ $_ . "_tcga" }{ 'cancer_id' } = $_;
 
+
+		my $cancer_id = $mainDB->get_data( -id => 'cancer_id',
+						   -val => $merge_code );
+		
+		# If we're inserting study for the first time, don't have to checek for cancer_id
+		unless( defined $cancer_id ) {
+			
+		    $gen->pprint( -tag => 'error',
+				  -val => "cancer_study ($_) / cancer_id (?) not defined " .
+				  "Please add cancer_study to \$DATAHUB/mainDB.seedDB/disease_code_to_cancer_id.tsv" );
 		}
+		    
+		$data_s{ $study_name }{ source } = $options{ -s };
 
-		
-		# check to see if there are more than 1 study_name
-		my $cnt = scalar keys %data_s;
-		
-		$gen->pprint( -tag => 'error', -val => 'More that 1 Cancer Study Found' ) if( $cnt != 1 );
-		
+		$data_s{ $study_name }{ description } = $mainDB->get_data( -id => 'description',
+								    -val => $merge_code );
+		$data_s{ $study_name }{ cancer_id } = $cancer_id;
+
+		$data_s{ $study_name }{ study_name } = $study_name;
 	    }	    
 	}
+	
 
 	# based on the merged data from firehouse, we're only going to store specific column
 	# this will be chosen based on the length of the header
+
+	# $#header == 1 means that this column is blank... this is what we want;
 	
 	if( ($header[0] eq 'patient' && $#header == 1) ) {
 	    
@@ -370,9 +404,11 @@ sub process_patient_sample {
 	    if( $header[1] eq 'stable_patient_id' ) {
 		$_ = uc for @line;
 	    }
-	    
+
+	    # Store this to an array as we want to add it a differen group later on
 	    @patient_list = @line if( $header[1] eq 'stable_patient_id' );
 	    
+	    # ADD TO HASH : stable_patient_id
 	    store_to_data( -col0 => 'patient',
 			   -col1 => $header[1],
 			   -key => \@key,
@@ -381,21 +417,59 @@ sub process_patient_sample {
 
 	} elsif($header[1] eq 'primary_pathology' && $#header == 2) {
 
+	    # ADD TO HASH : primary_pathology
 	    store_to_data( -col0 => 'patient',
 			   -col1 => $header[2],
 			   -key => \@key,
 			   -data => \%data, 
 			   -line => \@line );
+
+	} elsif($header[1] eq 'primary_pathology' && $#header == 3) {
 	    
- 
+	    # ADD TO HASH : primary_pathology
+	    store_to_data( -col0 => 'patient',
+			   -col1 => $header[3],
+			   -key => \@key,
+			   -data => \%data, 
+			   -line => \@line );
+
+
+	} elsif($header[1] eq 'primary_pathology' && $#header == 4) {
+	    
+	    # ADD TO HASH : primary_pathology
+	    store_to_data( -col0 => 'patient',
+			   -col1 => $header[4],
+			   -key => \@key,
+			   -data => \%data, 
+			   -line => \@line );
+	    
+
+	} elsif($header[1] eq 'new_tumor_events' && $#header == 2) {
+	    
+	    # ADD TO HASH : primary_pathology
+	    store_to_data( -col0 => 'patient',
+			   -col1 => $header[2],
+			   -key => \@key,
+			   -data => \%data, 
+			   -line => \@line );
+
+	} elsif($header[1] eq 'new_tumor_events' && $#header == 3) {
+	    
+	    # ADD TO HASH : primary_pathology
+	    store_to_data( -col0 => 'patient',
+			   -col1 => $header[3],
+			   -key => \@key,
+			   -data => \%data, 
+			   -line => \@line );
+
 	} elsif( $header[1] =~ /^sample/ && $#header == 3 ) {
 
 	    # Capitalize 
 	    if( $header[3] eq 'stable_sample_id' ) {
-
 		$_ = uc for @line;
 	    }
-	    
+
+
 	    # col0 has to be header[2] as sometiems its sample-2, sample-3
 	    store_to_data( -col0 => $header[2],
 			   -col1 => $header[3],
@@ -406,19 +480,19 @@ sub process_patient_sample {
 	    # cancer_id is not part of the normal data input, so need to manually added this for each sample (sample-2, sample-3)
 	    # but only add it once
 	    
-	    unless( exists $added{ $header[2] }{ 'cancer_' } ) {
+	    unless( exists $added{ $header[2] }{ 'cancer_id' } ) {
 
 		# Disease code != cancer_id as sometimes its different (i.e pcpg cancer study = mnet cancer type)
 		# so we need to map it
 		
 		my @cancer_id = @disease_code;
-		$_ = $map_cancer_id->{ $_ }{ 'cancer_id' } for @cancer_id;
-		
+
 		store_to_data( -col0 => $header[2],
 			       -col1 => 'cancer_id',
 			       -key => \@key,
 			       -data => \%data, 
 			       -line => \@cancer_id );
+		
 		
 		# Add the stable_patient_id to the sample hash
 		store_to_data( -col0 => $header[2],
@@ -426,9 +500,8 @@ sub process_patient_sample {
 			       -key => \@key,
 			       -data => \%data, 
 			       -line => \@patient_list );
-	
 		
-		$added{ $header[2] }{ 'cancer_id' } = 1;
+		$added{ $header[2] }{ cancer_id } = 1;
 	    }
 
 	}
@@ -439,8 +512,11 @@ sub process_patient_sample {
     
     # study_name is only added to patient hash, need to add this to everything else
     foreach my $uuid ( keys %data ) {
+	
 	foreach my $cat (keys %{ $data{ $uuid } } ) {
+	
 	    next if( $cat eq 'patient' );
+	    
 	    $data{ $uuid }{ $cat }{ study_name } = $data{ $uuid }{ patient }{ study_name };
 	}
     }
@@ -469,23 +545,11 @@ sub store_to_data {
 	    splice( @sid, 4 );
 
 	    $val = join ("-",, @sid);
-
-	    #$val =~ s/(.*)\w$/$1/;
-
 	}
 	
 	
 	$param{ -data }{ $uuid }{ $col0 }{ $col1 } = $val;
 	
-	# # store the header for meta columns
-	# if( $col0 eq 'patient' ) {
-	#     $header_pm{ $col1 } = undef;
-	    
-	# } elsif ( $col0 eq 'sample' ) {
-	#     $header_sm{ $col1 } = undef;
-	# }
-	
-	# col1 = patient or sample
 	if( $col0 =~ /^sample/ ) {
 
 	    $header_meta{ sample }{ $col1 } = undef;
@@ -495,46 +559,4 @@ sub store_to_data {
 	}
 	
     }
-}
-
-sub load_cancer_id {
-
-    my %ret;
-    
-    my $dir = `echo \$DATAHUB`; chomp $dir;
-
-    my $file = "$dir/firehose/disease_code_to_cancer_id.txt";
-
-    $gen->pprint( -val => "Loading cancer mapping\n" );
-    
-    open( IN, "<$file" ) or die "$!\n";
-    
-    my $header = 0;
-    my @header;
-    while( <IN> ) {
-	chomp $_;
-	
-	if( $header == 0 ) {
-	    @header = split( /\t/, $_ );
-	    
-	    $header[$_] = map_key( -id => $header[$_]) foreach( 0 .. $#header );
-	    $header++;
-	    next;
-	}
-	
-	# 0 = cancer_project (acc_tcga)
-	# 1 = cancer_type(acc)
-	
-	my @l = split( /\t/, $_ );
-	my %line;
-	@line{ @header } = @l;
-
-	$ret{ $line{ study_name } } = \%line;
-	
-    }
-
-    close( IN );
-
-    return( \%ret );
-
 }

@@ -68,11 +68,15 @@ my $table = $options{ -t };
 my %data;
 
 
+$gen->pprint( -level => 0, 
+	      -tag => $options{ -t },
+	      -val => "Loading $options{ -t }" );
+
+
 $mainDB->load_db_data( -table => 'gene' );
 $mainDB->load_db_data( -table => 'gene_alias' );
 $mainDB->load_db_data( -table => 'variant' );
 $mainDB->load_db_data( -table => 'sample' );
-
 
 
 # Load specific columns that needs to be remap

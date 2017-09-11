@@ -96,11 +96,11 @@ sub pprint {
 	print "$val\n";
 	
     } elsif( $param{ -level } == 0 ) {
-	print "$stamp\n";
+	
 	print "$stamp" . '-' x length($val) . "\n$stamp";
 	print "$val\n";
 	print "$stamp" . '-' x length($val) . "\n";
-	print "$stamp\n";
+	
 	
     } elsif( $param{ -level } == 1 ) {
 	print $stamp;	
