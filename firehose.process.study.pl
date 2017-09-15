@@ -66,10 +66,10 @@ $gen->pprint( -level => 0,
 	      -val => "Loading $options{ -t }" );
 
 
-$mainDB->load_db_data( -table => 'study' );
-$mainDB->load_db_data( -table => 'patient' );
-$mainDB->load_db_data( -table => 'sample' );
-$mainDB->load_db_data( -table => 'cancer_study' );
+$mainDB->load_dbdata( -table => 'study' );
+$mainDB->load_dbdata( -table => 'patient' );
+$mainDB->load_dbdata( -table => 'sample' );
+$mainDB->load_dbdata( -table => 'cancer_study' );
 
 my %header_pm;
 my %header_sm;

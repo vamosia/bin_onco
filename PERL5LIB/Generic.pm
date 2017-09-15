@@ -86,10 +86,11 @@ sub pprint {
     #my $time  = `date`; chomp $time;
     
     my $tag = $param{ -tag } || "INFO";
-    my $red = ( $tag =~ /error/i || $tag =~ /warning/i ) ? 1 : 0;
     #my $stamp = "[$time] [" . uc($tag) ."] ";
     my $stamp = "[" . uc($tag) ."] ";
-    print color('bold red') if( $red );
+    print color('bold red') if( $tag =~ /error/i );
+    print color('bold blue') if( $tag =~ /warning/i );
+    
 
     if( ! exists $param{ -level } ) {
 	print $stamp;
@@ -113,17 +114,25 @@ sub pprint {
 	print "$buffer-> $param{ -val }\n";
     } 
 
-    print color('reset') if ( $red );
+    print color('reset') if ( $tag =~ /warning/i || $tag =~ /error/i );
 
     exit if( $tag =~ /error/i );
     
 }
 
-sub pprogres_reset {
+sub pprogress_reset {
+    my ($class,
+	%param ) = @_;
     $p_cnt = 0;
+    
+    pprint( @_ );
 }
 
-sub pprogres {
+sub pprogress_end {
+    print "\n" if( $options{-v} );
+}
+
+sub pprogress {
 
     my( $class,
 	%param ) = @_;

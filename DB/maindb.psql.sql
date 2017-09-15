@@ -32,7 +32,7 @@ ALTER TABLE public.study
 CREATE TABLE IF NOT EXISTS public.study_meta (
   study_id INTEGER NOT NULL,
   attr_id TEXT NOT NULL,
-  attr_value TEXT NOT NULL,
+  attr_value TEXT NULL,
   PRIMARY KEY (study_id, attr_id),
   CONSTRAINT fk_study_id
     FOREIGN KEY (study_id)
@@ -69,7 +69,7 @@ ALTER TABLE public.patient
 CREATE TABLE IF NOT EXISTS public.patient_meta (
   patient_id INTEGER NOT NULL,
   attr_id TEXT NOT NULL,
-  attr_value TEXT NOT NULL,
+  attr_value TEXT NULL,
   PRIMARY KEY (patient_id, attr_id),
   CONSTRAINT fk_patient_id
     FOREIGN KEY (patient_id)
@@ -104,7 +104,8 @@ CREATE TABLE IF NOT EXISTS public.variant (
   start_position BIGINT NOT NULL,
   end_position BIGINT NOT NULL,
   ref_allele TEXT NULL,
-  var_allele TEXT NULL,
+  var_allele_1 TEXT NULL,
+  var_allele_2 TEXT NULL,
   genome_build TEXT NOT NULL,
   strand TEXT NULL,
   PRIMARY KEY (variant_id),
@@ -162,7 +163,7 @@ ALTER TABLE public.sample
 CREATE TABLE IF NOT EXISTS public.sample_meta (
   sample_id INTEGER NOT NULL,
   attr_id TEXT NOT NULL,
-  attr_value TEXT NOT NULL,
+  attr_value TEXT NULL,
   PRIMARY KEY (sample_id, attr_id),
   CONSTRAINT fk_sample_id
     FOREIGN KEY (sample_id)
@@ -203,7 +204,7 @@ ALTER TABLE public.patient_event
 CREATE TABLE IF NOT EXISTS public.variant_meta (
   variant_id INTEGER NOT NULL,
   attr_id TEXT NOT NULL,
-  attr_value TEXT NOT NULL,
+  attr_value TEXT NULL,
   PRIMARY KEY (variant_id, attr_id),
   CONSTRAINT fk_variant_id
     FOREIGN KEY (variant_id)
@@ -256,7 +257,7 @@ CREATE TABLE IF NOT EXISTS public.meta_list (
 CREATE TABLE IF NOT EXISTS public.patient_event_meta (
   event_id INTEGER NOT NULL,
   attr_id TEXT NOT NULL,
-  attr_value TEXT NOT NULL,
+  attr_value TEXT NULL,
   PRIMARY KEY (event_id, attr_id),
   CONSTRAINT fk_event_id
     FOREIGN KEY (event_id)
@@ -274,7 +275,7 @@ ALTER TABLE public.patient_event_meta
 CREATE TABLE IF NOT EXISTS public.gene_meta (
   entrez_gene_id INTEGER NOT NULL,
   attr_id TEXT NOT NULL,
-  attr_value TEXT NOT NULL,
+  attr_value TEXT NULL,
   PRIMARY KEY (entrez_gene_id, attr_id),
   CONSTRAINT fk_entrez_gene_id
     FOREIGN KEY (entrez_gene_id)
@@ -331,7 +332,7 @@ ALTER TABLE public.cnv
 CREATE TABLE IF NOT EXISTS public.cnv_meta (
   cnv_id INTEGER NOT NULL,
   attr_id TEXT NOT NULL,
-  attr_value TEXT NOT NULL,
+  attr_value TEXT NULL,
   PRIMARY KEY (cnv_id, attr_id),
   CONSTRAINT fk_cnv_id
     FOREIGN KEY (cnv_id)
@@ -469,7 +470,7 @@ ALTER TABLE public.variant_sample
 CREATE TABLE IF NOT EXISTS public.variant_sample_meta (
   variant_sample_id INTEGER NOT NULL,
   attr_id TEXT NOT NULL,
-  attr_value TEXT NOT NULL,
+  attr_value TEXT NULL,
   PRIMARY KEY (variant_sample_id, attr_id),
   CONSTRAINT fk_variant_sample_id
     FOREIGN KEY (variant_sample_id)
@@ -489,7 +490,7 @@ ALTER TABLE public.variant_sample_meta
 CREATE TABLE IF NOT EXISTS public.cnv_sample_meta (
   cnv_sample_id INTEGER NOT NULL,
   attr_id TEXT NOT NULL,
-  attr_value TEXT NOT NULL,
+  attr_value TEXT NULL,
   PRIMARY KEY (cnv_sample_id, attr_id),
   CONSTRAINT fk_cnv_sample_id
     FOREIGN KEY (cnv_sample_id)
@@ -533,12 +534,11 @@ ALTER TABLE public.analysis
 -- -----------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS public.analysis_data (
-  analysis_data_id SERIAL NOT NULL,
   analysis_id INTEGER NOT NULL,
   entrez_gene_id INTEGER NULL,
   attr_id TEXT NOT NULL,
-  attr_value TEXT NOT NULL,
-  PRIMARY KEY (analysis_data_id, attr_id, entrez_gene_id),
+  attr_value TEXT NULL,
+  PRIMARY KEY (analysis_id, attr_id, entrez_gene_id),
   CONSTRAINT fk_entrez_gene_id
     FOREIGN KEY (entrez_gene_id)
     REFERENCES public.gene (entrez_gene_id)
