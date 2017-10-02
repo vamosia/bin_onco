@@ -1,3 +1,4 @@
+#!/usr/bin/perl -w
 package MainDB;
 
 use strict;
@@ -6,22 +7,14 @@ use Data::Dumper;
 use Generic;
 use Term::ANSIColor;
 use DBI; 
+use Storable;
 # use Exporter qw(import);
  
 # our @EXPORT_OK = qw(load_dbtable load_dbpriority execute_sql import_many );
-my $dbh;
-my %options;
-my %sql;
-my %dbtable;
-my %dbpriority;
-my $db;
-my $schema = "";
-my $debug;
-my $gen;
-my %seen_entrez_map;
+my (%options, %sql, %dbtable, %dbpriority);
+my (%seen_entrez_map, %many_sql, %db_data);
+my ($dbh, $db, $debug, $gen, $schema, $pwd );
 my @many_sql;
-my %many_sql;
-my %db_data;
 
 =head2 new
 
@@ -46,9 +39,14 @@ my %db_data;
 sub new {
     my ($class, %param) = @_;
     
-    %options = %param;
+    $schema = "";
 
-    $param{ -table } = "";
+    %options = %param;
+    
+    undef %db_data;
+    undef %dbtable;
+    $schema = "";
+    $pwd = `pwd`; chomp $pwd;
     
     $gen = new Generic( %param );
 
@@ -56,144 +54,215 @@ sub new {
 	$gen->pprint( -tag => "ERROR",
 		      -val => "MainDB.pm : -db Required in $0" );
     }
-    
+
     $db = $param{ -db };
-    
+
     $schema = $param{ -schema } . "." if( defined $param{ -schema } );
-    
-    
-    
-    
-    $dbh = DBI->connect("dbi:Pg:dbname=$param{ -db };host=localhost;port=5432",'postgres','ionadmin',{AutoCommit=>0,RaiseError=>1,PrintError=>0});
 
-    load_dbtable();
-    
+    if ( ! defined $dbh ) {
+	$dbh = DBI->connect("dbi:Pg:dbname=$param{ -db };host=localhost;port=5432",'postgres','ionadmin',{AutoCommit=>0,RaiseError=>1,PrintError=> 1});
+    }
 
+    %dbtable = %{ load_dbtable() };
+    
     my $self = {};
-    
     bless $self, $class;
-    
+
     return $self;
 }
 
 sub load_dbdata {
-
+    
     my( $class,
 	%param ) = @_;
 
     my $table = $param{ -table };
-    my $pwd = `pwd`; chomp $pwd;
-    
+
     my $out = "$pwd/db.${table}.tsv";
     
-    $gen->pprint( -val => "Loading '$table' table from $options{ -db }" );
+    my %storable = ( gene => "/srv/datahub/mainDB.seedDB/data_gene.storable",
+		     gene_alias => "/srv/datahub/mainDB.seedDB/data_gene_alias.storable", );
+		     
+    if( ($table eq "gene" || $table eq "gene_alias") &&
+	-e $storable{ $table } ) {
+	$gen->pprint( -val => "Loading Storable : $storable{ $table }",
+		      -level => 2 );
+	
+	$db_data{ $table } = retrieve( $storable{ $table } );
+	
+	return(0);	
+    } 
+
+    $gen->pprint( -val => "Loading DB data : $out",
+		  -level => 2 );
     
     my %query = ( study          => "SELECT * from study",
 		  cancer_study   => "SELECT * FROM cancer_study",
 		  patient        => "SELECT patient_id, stable_patient_id, study_id FROM patient",
 		  sample         => "SELECT sample_id, stable_sample_id FROM SAMPLE",
 		  sample2patient => "SELECT sample_id, patient_id FROM SAMPLE",
-		  patient2study  => "SELECT patient_id, study_id FROM PATIENT",		  
+		  sample2study   => "SELECT sy.study_id, sm.sample_id FROM SAMPLE sm, PATIENT p, STUDY sy WHERE sm.patient_id = p.patient_id AND p.study_id = sy.study_id",
+ 		  patient2study  => "SELECT patient_id, study_id FROM PATIENT",		  
 		  gene           => "SELECT entrez_gene_id, hugo_gene_symbol FROM gene",
 		  gene_alias     => "SELECT gene_alias, entrez_gene_id FROM gene_alias",
 		  variant        => "SELECT variant_id, varkey FROM variant",
+		  variant_meta   => "SELECT DISTINCT variant_id, attr_id FROM variant_meta",
+		  variant_sample => "SELECT variant_sample_id, variant_id, sample_id FROM variant_sample",
+		  variant_sample_meta => "SELECT variant_sample_id, attr_id FROM variant_sample_meta",
 		  cnv            => "SELECT cnv_id, entrez_gene_id, alteration FROM cnv",
 		  analysis       => "SELECT analysis_id, study_id, sample_id, name FROM analysis" 
 	);
     
-    #if( $table eq 'cancer_study' ) {
+    if( ! exists $query{ $table } ) {
+	$gen->pprint( -tag => "ERROR " . __LINE__ ,
+		      -val => "Query does not exists for $table" );
+    }
 
-#	$out = `echo \$DATAHUB/mainDB.seedDB/disease_code_to_cancer_id.tsv`; chomp $out;
-	
-#    } else {
+    my $qq = qq(sudo -i -u postgres psql $db -c  "\\copy ($query{$table}) To '$out' With DELIMITER E'\\t' CSV HEADER";);
 
-    	my $qq = qq(sudo -i -u postgres psql $db -c  "\\copy ($query{$table}) To '$out' With DELIMITER E'\\t' CSV HEADER");
-	
-	system( $qq );
-	system( "sudo chown alexb.alexb $out" );
-	system( "sudo chmod 777 $out" );
+    my $a = system( $qq );
 
- #   }
+    if( $a == -1 ) {
+	$gen->pprint( -tag => "ERROR",
+		      -val => "Database export failed\n$qq" );
+    }
+    system( "sudo chown alexb.alexb $out; sudo chmod 777 $out;" );
     
-    my $r  = $gen->read_file( -file => "$out",
-			      -delim => '\t');
-    my $total = $#{ $r->{ data } };
+    open( IN, "<$out" ) or die "MainDB:load_dbdata() - $out";
 
-    $gen->pprogress_reset( -val => "Loading DB data '$table'" );
+    my $header = 0;
+    my @header;
     
-    foreach my $line( @{ $r->{ data } } ) {
+    while( my $curr = <IN> ) {
 	
-	#$gen->pprogress( -total => $total, -v => 1 );
+	#$curr =~ s/\)/\\)/g;
+	#$curr =~ s/([^A-Za-z0-9\t\_\- ])//g;
 	
+	chomp $curr;
+
+	next if( $curr =~ /^#/ );
+
+	if( $header == 0 ) {
+	    @header = split( /\t/, $curr );
+	    $header++;
+	    next;
+	}
+
+	my %line;
+
+
+	@line{ @header } = split( /\t/, $curr );
+
 	if( $table eq 'study' ) {
-	
-	    $db_data{ $table }{ $line->{study_name} } = $line->{ study_id };
-
+	    
+	    $db_data{ $table }{ $line{study_name} } = $line{ study_id };
+	    
 	} elsif( $table eq 'patient' ) {
-	    my $study_id = $line->{ study_id };
+	    my $study_id = $line{ study_id };
 
-	    my $stable = $line->{ stable_patient_id };
+	    my $stable = $line{ stable_patient_id };
 
 	    my $pkey = sprintf "%s_%s", $study_id, $stable;
 	    
-	    $db_data{ $table }{ $pkey } = $line->{ patient_id };
+	    $db_data{ $table }{ $pkey } = $line{ patient_id };
 	    
 	} elsif( $table eq 'sample' ) {
-	    $db_data{ $table }{ $line->{stable_sample_id} } = $line->{ sample_id };
-	    
-	} elsif( $table eq 'sample2patient' ) {
-	    $db_data{ $table }{ $line->{sample_id} } = $line->{ patient_id };
+	    $db_data{ $table }{ $line{stable_sample_id} } = $line{ sample_id };
 
+	} elsif( $table eq 'sample2patient' ) {
+	    $db_data{ $table }{ $line{sample_id} } = $line{ patient_id };
+	    
+	} elsif( $table eq 'sample2study' ) {
+	    $db_data{ $table }{ $line{sample_id} } = $line{ study_id };
+	    
 	} elsif( $table eq 'patient2study' ) {
-	    $db_data{ $table }{ $line->{patient_id} } = $line->{study_id};
+	    $db_data{ $table }{ $line{patient_id} } = $line{study_id};
 	    
 	} elsif( $table eq 'gene' ) {
-	    $db_data{ $table }{ $line->{ entrez_gene_id } } = $line->{ hugo_gene_symbol };
-	    $db_data{ hugo }{ $line->{ hugo_gene_symbol } }= $line->{ entrez_gene_id };
 
+	    $db_data{ $table }{ entrez }{ $line{ entrez_gene_id } } = $line{ hugo_gene_symbol };
+	    $db_data{ $table }{ hugo   }{ $line{ hugo_gene_symbol } }= $line{ entrez_gene_id };
+	    
 	} elsif( $table eq 'gene_alias' ) {
 
-	    $db_data{ $table }{ $line->{ gene_alias } } = $line->{ entrez_gene_id };
+	    my $gene_alias = $line{gene_alias};
+	    
+	    my $entrez = $line{entrez_gene_id};
+	    
+	    $db_data{ $table }{ hugo }{ "$gene_alias" } = $entrez;
+	    $db_data{ $table }{ entrez }{ $entrez } = "$gene_alias";
+	    
 	} elsif( $table eq "variant" ) {
+	    $db_data{ $table }{ $line{varkey} } = $line{variant_id};
 
-	    $db_data{ $table }{ $line->{ varkey } } = $line->{ variant_id };
+	} elsif( $table eq "variant_sample_meta" ) {
+	    
+	    my $key = sprintf "%s+%s", $line{variant_sample_id}, $line{ attr_id };
+	    
+	    $db_data{ $table }{ $key } = 1;
+
+
+	} elsif( $table eq "variant_meta" ) {
+
+	    my $key = sprintf "%s+%s", $line{variant_id}, $line{ attr_id };
+	    
+	    $db_data{ $table }{ $key } = 1;
+
 	} elsif( $table eq 'cnv' ) {
 	    
-	    my $entrez = $line->{ entrez_gene_id };
+	    my $entrez = $line{ entrez_gene_id };
 	    
-	    my $alt = $line->{ alteration };
+	    my $alt = $line{ alteration };
 
-	    $alt =~ s/Deep Deletion/-2/;
-	    $alt =~ s/High Amplification/2/;
+	    # TCGA
+	    # 2                         2_high_amplification
+	    # 1                         1_gain          - excluded
+	    # 0  Diploid / neutral   /  0_no_change     - excluded
+	    # -1 hemizygous_deletion / -1_shallow_loss  - excluded
+	    # -2 homozygous_deletion / -2_deep_loss
 	    
-	    $db_data{ $table }{ "${entrez}_${alt}" } = $line->{ cnv_id };
+	    $db_data{ $table }{ "${entrez}_${alt}" } = $line{ cnv_id };
 	    
-#	} elsif( $table eq 'cancer_study' ) {
-#
-#	    $db_data{ $table }{ $line->{ disease_code} }{ cancer_id } = $line->{ cancer_id };
-#	    $db_data{ $table }{ $line->{ disease_code } }{ description } = $line->{ description };
-	    # 	    $db_data{ $table }{ $line->{ disease_code } }{ study_name } = $line->{ study_name };
+	} elsif( $table eq 'variant_sample' ) {
+	    
+	    my $vkey = sprintf "%s+%s", $line{variant_id}, $line{sample_id};
+
+	    $db_data{ $table }{ $vkey } = $line{variant_sample_id};
 
 	} elsif( $table eq 'cancer_study' ) {
-	    print Dumper $line;exit;
-	    my $key = sprintf "%s+%s", $line->{study_id}, $line->{cancer_id};
-
-	    $db_data{ $table }{ $key } = $line->{cancer_study_id};
-		
-	} elsif( $table eq 'analysis' ) {
 	    
-	    my $study_id = $line->{ study_id };
-	    my $sample_id = $line->{ sample_id };
-	    my $analysis = $line->{ name };
+	    my $key = sprintf "%s+%s", $line{study_id}, $line{cancer_id};
 
-	    $db_data{ analysis }{ "${study_id}+${sample_id}+${analysis}" } = $line->{ analysis_id };
-	    	    
+	    $db_data{ $table }{ $key } = $line{cancer_study_id};
+	    
+	} elsif( $table eq 'analysis' ) {
+
+	    my $study_id = $line{ study_id };
+	    my $sample_id = $line{ sample_id };
+	    my $analysis = $line{ name };
+	    my $key = sprintf "%s+%s+%s", $study_id, $sample_id, $analysis;
+	    
+	    $db_data{ analysis }{ $key } = $line{ analysis_id };
+	    
+	    
 	} else {
 	    print Dumper "ERROR TODO ENCOUTNERED in $0";
 	    exit;
 	}
+
     }
-    $gen->pprogress_end();
+
+    close(IN);
+
+    if( ( $table eq 'gene' || $table eq 'gene_alias' )
+	&& ! -e $storable{ $table } ) {
+	
+	$gen->pprint( -val => "Storing : $storable{ $table }" );
+	
+	store $db_data{ gene }, $storable{ $table };
+    }
+
+    
 }
 
 
@@ -209,7 +278,7 @@ sub get_data {
 	
 	load_dbdata( $class, -table => 'study' ) unless( defined $db_data{ study } );
 	$ret = $db_data{ study }{ $val };
-	
+
     } elsif( $id =~ /^disease_to_study_name$/ ) {
 	load_dbdata( $class, -table => 'cancer_study' ) unless( defined $db_data{ cancer_study } );
 	$ret = $db_data{ cancer_study }{ $val }{ study_name };
@@ -230,6 +299,11 @@ sub get_data {
 
 	$ret = $db_data{ sample2patient }{ $val };
 
+    } elsif( $id =~ /^sample2study/ ) {
+	load_dbdata( $class, -table => $id ) unless( defined $db_data{ $id } );
+	
+	$ret = $db_data{ $id }{ $val };
+	
     } elsif( $id =~ /patient2study_id/ ) {
 	
 	load_dbdata( $class, -table => 'patient2study' ) unless( defined $db_data{ patient2study } );
@@ -239,13 +313,43 @@ sub get_data {
     } elsif( $id =~ /^stable_sample_id$/i || $id =~ /^sample_id$/) {
 
 	load_dbdata( $class, -table => 'sample' ) unless( defined $db_data{ sample } );
+
 	$ret = $db_data{ sample }{ $val };
 	
     } elsif( $id =~ /^varkey$/i || $id =~ /^variant_id$/) {
+	
 	load_dbdata( $class, -table => 'variant' ) unless( defined $db_data{ variant } );
+	
 	$ret = $db_data{ variant }{ $val };
 
+    } elsif( $id =~ /^variant_sample_id/ ) {
+
+	load_dbdata( $class, -table => 'variant_sample' ) unless( defined $db_data{ variant_sample } );
+	
+	$ret = $db_data{ variant_sample }{ $val };
+
+    } elsif( $id =~ /^variant_meta/ ) {
+
+	load_dbdata( $class, -table => 'variant_meta' ) unless( defined $db_data{ variant_meta } );
+	
+	$ret = $db_data{ variant_meta }{ $val };
+	
+    } elsif( $id =~ /^variant_sample_meta/ ) {
+
+	load_dbdata( $class, -table => $id ) unless( defined $db_data{ $id } );
+	
+	$ret = $db_data{ $id }{ $val };
+
+    
     } elsif( $id =~ /^cnv_id/i ) {
+
+	# TCGA
+	# 2                         2_high_level_amplification
+	# 1                         1_gain          - excluded
+	# 0  Diploid / neutral   /  0_no_change     - excluded
+	# -1 hemizygous_deletion / -1_shallow_loss  - excluded
+	# -2 homozygous_deletion / -2_deep_loss
+	
 	load_dbdata( $class, -table => 'cnv' ) unless( defined $db_data{ cnv } );
 	$ret = $db_data{ cnv }{ $val };
 
@@ -260,33 +364,40 @@ sub get_data {
     } elsif( $id =~ /^analysis_id$/ ) {
 	load_dbdata( $class, -table => 'analysis' ) unless( defined $db_data{ analysis } );
 	$ret = $db_data{ analysis }{ $val };
-
-    } elsif( $id =~ /^entrez$/ ) {
+	
+    } elsif( $id =~ /^entrez$/ || $id =~ /^entrez_gene_id/ ) {
 	
 	load_dbdata( $class, -table => 'gene' ) unless( defined $db_data{ gene } );
+	
+	load_dbdata( $class, -table => 'gene_alias' ) unless( defined $db_data{ gene_alias } );
 
+	
 	$ret = get_entrez( $class,
 			   -hugo => $param{ -hugo },
 			   -entrez => $param{ -entrez } );
+
     }
 
+    
     my $tag = $param{-tag} || "ERROR";
-
+    
     if( ! defined $ret && ($tag eq "ERROR" || $tag eq "WARNING" ) ) {
-	
-	$gen->pprint( -tag => $tag,
-		      -val => "'$param{-id}' not defined : '$param{-val}'" );
-	
-    } elsif( defined $ret && $tag eq "EXISTS" ) {
 
 	$gen->pprint( -tag => $tag,
-		      -val => "$param{-id} '$param{-val}' already exists in DB. Skip" );
+		      -val => "MainDB::get_data : Value not defined for '$param{-id}' = $param{-val}. Hint: check DB to see if value is defined" );
+
+    } elsif( defined $ret && $tag eq "EXISTS" ) {
+	
+	$gen->pprint( -tag => $tag,
+		      -val => "MainDB::get_data : Skipping $param{-id} '$param{-val}'. Already exists in DB",
+		      -d => 1 );
     }
     
     if( $id eq '/entrez/i' && $ret eq 'NA' ) {
 
 	$gen->pprint( -tag => $tag,
-		      -val => "Skipping entrez, Unknown Id '$param{-val}'" );
+		      -val => "MainDB::get_data : Skipping entrez, Unknown Id '$param{-val}'",
+		      -d => 1 );
 	    
     }
     
@@ -318,18 +429,18 @@ sub load_dbpriority {
     my $header = 0;
     my @header;
 
-    while( <IN> ) {
-	chomp $_;
+    while( my $curr = <IN> ) {
+	chomp $curr;
 
-	next if( $_ =~ /^,/ );
+	next if( $curr =~ /^,/ );
 
 	if( $header == 0 ) {
-	    $_ =~ s/#//g;
-	    @header = split( /,/, $_ );
+	    $curr =~ s/#//g;
+	    @header = split( /,/, $curr );
 	    $header++;
 	    next;
 	}
-	my @l = split( /,/, $_ );
+	my @l = split( /,/, $curr );
 	my %line;
 	@line{ @header } = @l;
 
@@ -370,27 +481,28 @@ sub load_dbtable {
 
     my( $class, %param) = @_;
 
-    $gen->pprint( -val => 'Loading DB tables' );
+    my %ret;
     
     my $file = `echo \$DATAHUB/mainDB.seedDB/table.column.csv`; chomp $file;
     
     open( IN, "<$file" ) or die "$!\n";
     my $header = 0;
     my @header;
+    
+    while( my $line = <IN> ) {
+	
+	chomp $line;
 
-    while( <IN> ) {
-	chomp $_;
-
-	next if( $_ =~ /^,/ );
+	next if( $line =~ /^,/ );
 
 	if( $header == 0 ) {
-	    $_ =~ s/#//g;
-	    @header = split( /,/, $_ );
+	    $line =~ s/#//g;
+	    @header = split( /,/, $line );
 	    $header++;
 	    next;
 	}
 	my %line;
-	@line{ @header } = split( /,/, $_ );
+	@line{ @header } = split( /,/, $line );
 	
 	# 0 - table
 	# 1 - column
@@ -402,11 +514,12 @@ sub load_dbtable {
 	my $key = $line{key};
 	my $fk_ref = $line{fk_ref};
 	
-	push( @{ $dbtable{ $table } } , { $column => \%line } );
+	push( @{ $ret{ $table } } , { $column => \%line } );
+	
     }
-
-
     close( IN );
+
+    return( \%ret );
 }
 
 sub map_fk {
@@ -433,12 +546,123 @@ sub print_data {
 
     my( $class,
 	%param ) = @_;
+    
+    
+    my $table = $param{ -table };
+    my $fh = $param{ -fh };
+    my $v = $param{ -v } || 0;
+
+    $gen->pprint( -val => "Generating data for $options{-db}.$table" ) if( $v );
+    
+    my $data = $param{ -data };
+    #'gene' => {
+    #      'gene_alias' => [
+    #            { 'entrez_gene_id' => {
+    #                           'column' => 'entrez_gene_id',
+    #                           'table' => 'gene_alias',
+    #                           'key' => undef,
+    #                           'fk_ref' => undef
+
+    my $out = "data_${table}.tsv";
+    my $total = $#{ $param{ -data } };
+    $gen->pprogress_reset() if( $v );
+    #open (OUT, ">$out" ) or die "$out : $\n";
+    
+    foreach my $line ( @{ $param{ -data } } ) {
+	
+	if( $table eq 'analysis_data' ) {
+	    
+	    # Generating meta data with the following format :
+	    # PK    ENTREZ ATTR_ID     ATTR_VALUE
+	    
+	    foreach my $meta( @{ $line->{ $table } } ) {
+		
+		if( ! defined $meta->{ pk } || ! defined $meta->{ entrez_gene_id } ||
+		    ! defined $meta->{ attr_id } || ! defined $meta->{ attr_value } ) {
+
+		    print Dumper $meta;
+		    
+		    $gen->pprint( -tag => "ERROR",
+				  -val => "Please see meta above and correct issue $0" );
+		    
+		}
+
+		printf $fh "%s\t%s\t%s\t%s\n", $meta->{ pk }, $meta->{ entrez_gene_id }, 
+		                               $meta->{ attr_id }, $meta->{ attr_value };
+
+	    }
+
+	
+	
+	} elsif( $table =~ /meta/i || $table eq 'analysis_data' ) {
+	    
+	    # Generating meta data with the following format :
+	    # PK    ATTR_ID     ATTR_VALUE
+	    foreach my $meta( @{ $line->{ $table } } ) {
+		
+		if( ! defined $meta->{ pk } ||
+		    ! defined $meta->{ attr_id } ||
+		    ! defined $meta->{ attr_value } ) {
+
+		    print Dumper $meta;
+		    
+		    $gen->pprint( -tag => "ERROR",
+				  -val => "Please see meta above and correct issue $0" );
+		    
+		}
+		
+		printf $fh "%s\t%s\t%s\n", $meta->{ pk }, $meta->{ attr_id }, $meta->{ attr_value };
+	    }
+	    
+	} else {
+
+	    my @join;
+	    
+	    # Iterate to the list of column
+	    foreach my $idx ( 0 .. $#{ $dbtable{ $table } } ) {
+		
+		my $col_hash = $dbtable{ $table }[$idx];
+		
+		# Fo reach columns determine its stats
+		foreach my $col ( keys %{ $col_hash } ) {
+
+		    next if (defined $col_hash->{ $col }{ key } &&
+			     $col_hash->{ $col }{ key } eq 'pk_auto' );
+		    
+		    my $val = $line->{ $col };
+
+		    unless( defined $val ) {
+			$gen->pprint( -tag => "ERROR " . __LINE__,
+				      -val => "Value not defined for '$col'" );
+				      
+			next;
+		    }
+
+		    push( @join, $val );
+		    
+		 }   
+	    }
+	    
+	    print $fh join( "\t", @join ),"\n";
+	}
+	
+	$gen->pprogress( -total => $total,
+			 -v => 1 ) if( $v );
+    }
+
+    $gen->pprogress_end() if( $v );
+    #close( OUT );
+}
+
+sub print_line {
+
+    my( $class,
+	%param ) = @_;
 
     
     my $table = $param{ -table };
      
-    $gen->pprint( -val => "Generating data for $options{-db}.$table" );
-
+    #$gen->pprint( -val => "Generating data for $options{-db}.$table" );
     
     my $data = $param{ -data };
     #'gene' => {
@@ -452,7 +676,7 @@ sub print_data {
     my $out = "data_${table}.tsv";
 
     open (OUT, ">$out" ) or die "$out : $\n";
-
+    
     foreach my $line ( @{ $param{ -data } } ) {
 
 	if( $table eq 'analysis_data' ) {
@@ -513,8 +737,9 @@ sub print_data {
 			     $col_hash->{ $col }{ key } eq 'pk_auto' );
 		    
 		    my $val = $line->{ $col };
+
 		    unless( defined $val ) {
-			$gen->pprint( -tag => "WARNING 12",
+			$gen->pprint( -tag => "ERROR " . __LINE__,
 				      -val => "Value not defined for '$col'" );
 				      
 			next;
@@ -531,6 +756,7 @@ sub print_data {
     }
     close( OUT );
 }
+
 
 =head2 load_db_priority
 
@@ -846,11 +1072,11 @@ sub generate_sql {
 	    # Contruct PRIMAR_KEY, attr_id, attr_val
 	    my @value;
 
-	    foreach( @columns ) {
-		if( $_ eq 'attr_id' ) {
+	    foreach my $curr( @columns ) {
+		if( $curr eq 'attr_id' ) {
 		    push( @value, $key );
 	
-		} elsif( $_ eq 'attr_value' ) {
+		} elsif( $curr eq 'attr_value' ) {
 		    push( @value, $val );
 		
 		} else {
@@ -1076,34 +1302,35 @@ sub get_entrez {
     my $hugo = "NA";
     my $entrez = "NA";
 
-    
-    if( exists $db_data{ gene }{ $q_entrez } ) {	
+    # Check entrez
+    if( exists $db_data{ gene }{ entrez }{ $q_entrez } ) {	
+	
 	$entrez = $q_entrez;
 	$hugo = $q_hugo;
+
+    # Check gene based on hugo	
+    } elsif( exists $db_data{ gene }{ hugo }{ $q_hugo } ) {
 	
-    } elsif( exists $db_data{ hugo }{ $q_hugo } ) {
-	
-	# Check gene based on hugo
-	$entrez = $db_data{ hugo }{ $q_hugo };
+	$entrez = $db_data{ gene }{ hugo }{ $q_hugo };
 	$hugo = $q_hugo;
 
-    } elsif( exists $db_data{ hugo }{ uc( $q_hugo ) } ) {
+    # Check gene based on hugo upper case
+    } elsif( exists $db_data{ gene }{ hugo }{ uc( $q_hugo ) } ) {
 	
-	# Check gene based on hugo
-	$entrez = $db_data{ hugo }{ uc( $q_hugo ) };
+	$entrez = $db_data{ gene }{ hugo }{ uc( $q_hugo ) };
 	$hugo = uc($q_hugo);
 
-    } elsif( exists $db_data{ gene_alias }{ $q_hugo } ) {
+    # Check gene alias based on hugo
+    } elsif( exists $db_data{ gene_alias }{ hugo }{ $q_hugo } ) {
+	
+	$entrez = $db_data{ gene_alias }{ hugo }{ $q_hugo };
+	$hugo = $db_data{ gene }{ entrez }{ $entrez };
 
-	# Check db_data{ gene_alias } based on hugo
-	$entrez = $db_data{ gene_alias }{ $q_hugo };
-	$hugo = $db_data{ gene }{ $entrez };
+    # Check db_data{ gene_alias } based on hugo upper case
+    } elsif( exists $db_data{ gene_alias }{ hugo }{ uc($q_hugo) } ) {
 	
-    } elsif( exists $db_data{ gene_alias }{ uc($q_hugo) } ) {
-	
-	# Check db_data{ gene_alias } based on hugo
-	$entrez = $db_data{ gene_alias }{ uc($q_hugo) };
-	$hugo = $db_data{ gene }{ $entrez };
+	$entrez = $db_data{ gene_alias }{ hugo }{ uc($q_hugo) };
+	$hugo = $db_data{ gene }{ entrez }{ $entrez };
 
     } 
 
@@ -1255,11 +1482,14 @@ $seq
 ");
     }
     
-    if( $options{ -tr } ) {
+    if( $options{ -tr } || $options{ -tre } ) {
 	$gen->pprint( -val => "Truncating database" );
+	
 	system( $st );
     }
-    
+
+    exit if( $options{ -tre } );
+	
 }
 
 __END__

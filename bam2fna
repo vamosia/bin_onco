@@ -1,4 +1,6 @@
 FILE=`basename $1 .bam`
-samtools bam2fq $1 > /tmp/$FILE.fastq 
-seqtk seq -A /tmp/$FILE.fastq > $FILE.fna
-rm /tmp/$FILE.fastq
+#samtools bam2fq $1 > /tmp/$FILE.fastq 
+#seqtk seq -A /tmp/$FILE.fastq > $FILE.fna
+#rm /tmp/$FILE.fastq
+#seqtk
+samtools bam2fq $1 | seqtk seq -A - > $FILE.fna

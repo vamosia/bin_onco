@@ -5,6 +5,7 @@ use warnings;
 use Data::Dumper;
 use Term::ANSIColor;
 use POSIX;
+use Text::Unidecode;
 # use Exporter qw(import);
 # our @EXPORT_OK = qw(read_file pprint);
 
@@ -36,7 +37,7 @@ sub read_file {
     my @header; 
     my @data;
     
-    open( IN, "<$param{ -file }" ) or die "$!\n";
+    open( IN, "<$param{ -file }" ) or die "Generic.pm - $param{-file} : $!\n";
 
     $delim = "\\|" if( $delim eq "|" );
     $delim = "\\," if( $delim eq "," );
@@ -44,22 +45,25 @@ sub read_file {
     while( <IN> ) {
 	
 	chomp $_;
+	my $line = unidecode($_);
 
-	next if( $_ =~ /^#/ );
+	$line =~ s/@//g;
+	$line =~ s/\///g;
+
+	next if( $line =~ /^#/ );
 	
 	if( $header == 0 ) {
 
-	    @header = split( /$delim/, $_ );
+	    @header = split( /$delim/, $line );
 
 	    $header++;
 	    next;
 	}
 
 	my %line;
-	
-	@line{ @header } = split( /$delim/, $_ );
 
-	
+	@line{ @header } = split( /$delim/, $line );
+
 	push( @data, \%line );
     }
     
@@ -85,7 +89,7 @@ sub pprint {
     # TODO : figure out a better way to do this
     #my $time  = `date`; chomp $time;
     
-    my $tag = $param{ -tag } || "INFO";
+    my $tag = $param{ -tag } || ($options{-tag0} || "INFO");
     #my $stamp = "[$time] [" . uc($tag) ."] ";
     my $stamp = "[" . uc($tag) ."] ";
     print color('bold red') if( $tag =~ /error/i );
@@ -98,9 +102,9 @@ sub pprint {
 	
     } elsif( $param{ -level } == 0 ) {
 	
-	print "$stamp" . '-' x length($val) . "\n$stamp";
+	print "$stamp" . '----' x length($val) . "\n$stamp";
 	print "$val\n";
-	print "$stamp" . '-' x length($val) . "\n";
+	print "$stamp" . '----' x length($val) . "\n";
 	
 	
     } elsif( $param{ -level } == 1 ) {
@@ -123,6 +127,7 @@ sub pprint {
 sub pprogress_reset {
     my ($class,
 	%param ) = @_;
+
     $p_cnt = 0;
     
     pprint( @_ );
@@ -147,10 +152,63 @@ sub pprogress {
     my $total = $param{ -total };
     
     $p_cnt++;
-   
-    printf "Processing.. %s/%s (%.1f%%)\r", $p_cnt, $total, (($p_cnt/$total)*100);
+
+    my $tag = $param{ -tag } || "Processing";
+    
+    printf STDERR "%s.. %s/%s (%.1f%%)        \r", $tag, $p_cnt, $total, (($p_cnt/$total)*100);
  
     
 }
+
+sub pivot_file {
+
+    my( $class,
+	%param ) = @_;
+       
+    open( IN, "<$param{-f}" ) or die "$param{-f} : $!\n";
+
+    my %data;
+    my $max = 0;
+    while( <IN> ) {
+	chomp $_;
+
+	my @line = split( /\t/, $_ );
+	my $id = shift @line;
+
+	$max = $#line if( $max < $#line );
+	
+	$data{ $id } = \@line;
+    }
+    
+    close( IN );
+
+    open( OUT, ">$param{-o}" ) or die "$param{-o} : $!\n";
+    
+    for my $idx ( 0 .. $max ) {
+
+	my @val;
+	
+	# print header
+	if( $idx == 0 ) {
+
+	    my @header;
+	    
+	    foreach my $id (sort keys %data ) {
+		push( @header, $id );
+	    }
+	    print OUT join( "\t", @header ), "\n";
+	}
+
+	# print value
+	foreach my $id( sort keys %data ) {
+	    push( @val, $data{ $id }[ $idx ] || "NA");
+	}
+	
+	print OUT join( "\t", @val ),"\n";
+    }
+
+    
+}
+
 
 1;
