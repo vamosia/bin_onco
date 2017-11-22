@@ -236,8 +236,11 @@ CREATE TABLE IF NOT EXISTS public.gene_alias (
 
 CREATE TABLE IF NOT EXISTS public.info (
   db_schema_version TEXT NOT NULL,
-  last_update TEXT NULL,
-  PRIMARY KEY (db_schema_version));
+  attr_id TEXT NOT NULL,
+  version TEXT NOT NULL,
+  comments TEXT,
+  timestamp TIMESTAMP default current_timestamp,
+  PRIMARY KEY (maindb_version, attr_id, version, timestamp));
 
 
 -- -----------------------------------------------------
@@ -245,8 +248,11 @@ CREATE TABLE IF NOT EXISTS public.info (
 -- -----------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS public.meta_list (
-  meta_id INTEGER NOT NULL,
-  PRIMARY KEY (meta_id));
+  table_name TEXT NOT NULL,
+  source TEXT NOT NULL,
+  attr_id TEXT NOT NULL,
+  attr_desc TEXT,
+  PRIMARY KEY (table_name, source, attr_id));
 
 
 -- -----------------------------------------------------
@@ -315,6 +321,7 @@ CREATE TABLE IF NOT EXISTS public.cnv (
   cnv_id SERIAL NOT NULL,
   entrez_gene_id INTEGER NOT NULL,
   alteration TEXT NOT NULL,
+  alteration_type TEXT NOT NULL,
   PRIMARY KEY (cnv_id),
   CONSTRAINT fk_entrez_gene_id
     FOREIGN KEY (entrez_gene_id)
@@ -428,15 +435,6 @@ CREATE TABLE IF NOT EXISTS public.gene_uniprot_map (
     REFERENCES public.gene (entrez_gene_id)
     ON DELETE NO ACTION
     ON UPDATE NO ACTION);
-
-
--- -----------------------------------------------------
--- Table public.history
--- -----------------------------------------------------
-
-CREATE TABLE IF NOT EXISTS public.history (
-  history_id INTEGER NOT NULL,
-  PRIMARY KEY (history_id));
 
 
 -- -----------------------------------------------------

@@ -109,7 +109,7 @@ sub load_dbdata {
 		  variant_meta   => "SELECT DISTINCT variant_id, attr_id FROM variant_meta",
 		  variant_sample => "SELECT variant_sample_id, variant_id, sample_id FROM variant_sample",
 		  variant_sample_meta => "SELECT variant_sample_id, attr_id FROM variant_sample_meta",
-		  cnv            => "SELECT cnv_id, entrez_gene_id, alteration FROM cnv",
+		  cnv            => "SELECT cnv_id, entrez_gene_id, alteration, alteration_type FROM cnv",
 		  analysis       => "SELECT analysis_id, study_id, sample_id, name FROM analysis" 
 	);
     
@@ -214,6 +214,8 @@ sub load_dbdata {
 	    
 	    my $alt = $line{ alteration };
 
+	    my $alt_type = $line{ alteration_type };
+
 	    # TCGA
 	    # 2                         2_high_amplification
 	    # 1                         1_gain          - excluded
@@ -221,14 +223,14 @@ sub load_dbdata {
 	    # -1 hemizygous_deletion / -1_shallow_loss  - excluded
 	    # -2 homozygous_deletion / -2_deep_loss
 	    
-	    $db_data{ $table }{ "${entrez}_${alt}" } = $line{ cnv_id };
-	    
+	    $db_data{ $table }{ "${entrez}_${alt}_${alt_type}" } = $line{ cnv_id };
+
 	} elsif( $table eq 'variant_sample' ) {
 	    
 	    my $vkey = sprintf "%s+%s", $line{variant_id}, $line{sample_id};
-
+	    
 	    $db_data{ $table }{ $vkey } = $line{variant_sample_id};
-
+	    
 	} elsif( $table eq 'cancer_study' ) {
 	    
 	    my $key = sprintf "%s+%s", $line{study_id}, $line{cancer_id};

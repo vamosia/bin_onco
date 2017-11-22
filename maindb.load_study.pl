@@ -18,6 +18,27 @@ require Encode::Detect;
 my %options = ( -sv => 'release_1.0.1',
 		-mf => "/srv/datahub/mainDB.seedDB/map.tsv" );
 
+
+( $#ARGV > -1 ) || die "
+
+DESCRIPTION:
+
+
+USAGE:
+     $0 -v
+
+EXAMPLE:
+     $0 -v -d -sm
+
+OPTIONS :
+     -v     Verbose Mode
+     -d     Debug Mode
+     -sm    Skip Merging of data
+
+AUTHOR:
+    Alexander Butarbutar (ab\@oncodna.com), OncoDNA
+\n\n";
+
 GetOptions( "d"      => \$options{ -d },
 	    "dd"     => \$options{ -dd },
 	    "ddd"    => \$options{ -ddd },
@@ -31,7 +52,8 @@ GetOptions( "d"      => \$options{ -d },
 	    "t=s"    => \$options{ -table },   # Table
 	    "f=s"    => \$options{ -f },       # File
 	    "c"      => \$options{ -c },       # Copy to DB
-	    "cc"     => \$options{ -cc },       # Copy to DB
+	    "cid=s"  => \$options{ -cid },     # Cancer ID
+	    "cc"     => \$options{ -cc },      # Copy to DB
 	    "tr"     => \$options{ -tr },      # Truncate
 	    "tre"    => \$options{ -tre }      # Truncate & Ex
 	   
@@ -74,6 +96,10 @@ my %process = ( study               => \&process_study,
     );
 
 
+my %alt_type = ( '2'    => 'high_level_amplification',
+		 '1.5'  => 'high_level_amplification',
+		 '-1.5' => 'deep_loss',
+		 '-2'   => 'deep_loss' );
 
 my %copy = ( 
     study                => qq(study(source, study_name, description)),
@@ -87,7 +113,7 @@ my %copy = (
     variant_meta         => qq(variant_meta(variant_id, attr_id, attr_value)),
     variant_sample       => qq(variant_sample(sample_id, variant_id)),
     variant_sample_meta  => qq(variant_sample_meta(variant_sample_id, attr_id, attr_value)),
-    cnv                  => qq(cnv(entrez_gene_id, alteration)),
+    cnv                  => qq(cnv(entrez_gene_id, alteration, alteration_type)),
     cnv_sample           => qq(cnv_sample(sample_id, cnv_id)),
     analysis             => qq(analysis(study_id, sample_id, name)),
     analysis_meta        => qq(analysis_meta(analysis_id, attr_id, attr_value)),
@@ -106,7 +132,7 @@ my %col = (
     variant_meta         => qq(variant_id, attr_id, attr_value),
     variant_sample       => qq(sample_id, variant_id),
     variant_sample_meta  => qq(variant_sample_id, attr_id, attr_value),
-    cnv                  => qq(entrez_gene_id, alteration),
+    cnv                  => qq(entrez_gene_id, alteration, alteration_type),
     cnv_sample           => qq(sample_id, cnv_id),
     analysis             => qq(study_id, sample_id, name),
     analysis_meta        => qq(analysis_id, attr_id, attr_value),
@@ -130,7 +156,7 @@ if( $options{ -tre } ) {
     exit;
 }
 
-my %meta = ( tcga    => \&load_meta_tcga );
+my %meta = ( tcga    => \&load_tcga_cancer_type_map );
 
 my $gen;
 my $mainDB;
@@ -140,18 +166,25 @@ my @header_sort;
 my (%map, %meta_study, %case, %seen, %sample_list);
 my ($table);
 my $pwd = `pwd`; chomp $pwd;
+my $pwd_study = `basename $pwd`; chomp $pwd_study;
 
+# Loads the mapping table 
+# external table name to maindb table name
 load_header_map();
 
 $gen = new Generic ( %options );
- 
+
 $table = $options{ -table };
+
+# Check to see if all the required parameter are enabled
+precheck(); 
 
 $gen->pprint( -level => 0,
 	      -val => "Start - $table" );
 
 $mainDB = new MainDB( %options );
 
+# Truncate database if truncate is enable.
 $mainDB->truncate( %options );
 
 run();
@@ -160,13 +193,11 @@ copy_to_db() if( $options {-c} );
 
 
 sub run {
-
-    precheck();
         
     # Load meta study
     &{ $meta{ $options{-s} } } if( exists $meta{ $options{-s} } );
     
-
+    # For TCGA, need to handle the CNV seperately
     if( $options{-table} eq 'analysis_data' && $options{-s} eq 'tcga' ) {
 	
 	load_tcga_cnv( -f => $options{f} );
@@ -250,7 +281,7 @@ sub precheck {
 	$gen->pprint( -tag => "ERROR",
 		      -val => "psql COPY query not defined" );
     }
-
+    
 }
 
 ###### SUBROUTINE
@@ -321,7 +352,7 @@ sub process_cancer_study {
         
     my $study_id = $mainDB->get_data( -id => 'study_id',
 				      -val => $line->{study_name} );
-    
+
     $line->{study_id} = $study_id;
     
     my $cs_key = sprintf "%s+%s", $study_id, $line->{cancer_id};
@@ -753,26 +784,35 @@ sub process_sample_meta {
 sub process_cnv {
  
    my @new_data;
-    my $line = $data[0];
+   my $line = $data[0];
 
     if( $options{-s} eq 'tcga' or $options{-s} eq 'genie' ) {
-
+	
 	foreach my $entrez ( keys %{ $line } ) {
-	    
-	    foreach my $alt( qw( -2_deep_loss 2_high_level_amplification ) ) {
-		my $key = sprintf "%s_%s", $entrez, $alt;
+
+	    foreach my $sample_id( keys %{ $line->{ $entrez } } ) {
+
+		my $alt = $line->{ $entrez }{ $sample_id };
+
+		next unless( $alt eq '2' || $alt eq '-2' || $alt eq '1.5' || $alt eq '-1.5' );
+		
+		#foreach my $alt( qw( -2  2 ) ) {
+		
+		my $key = sprintf "%s_%s_%s", $entrez, $alt, $alt_type{ $alt };
 		
 #		my $cnv_id = $mainDB->get_data( -id => 'cnv_id',
 #						-val => $key,
 #						-tag => 'EXISTS' );
 		
 #		next if( defined $cnv_id || $seen{ $table }{ $key } );
+	
 		next if( $seen{ $table }{ $key } );
 		
 		$seen{ $table }{ $key  } = undef;
-		
+	
 		push( @new_data, { entrez_gene_id => $entrez,
-				   alteration => $alt } );
+				   alteration => $alt,
+				   alteration_type => $alt_type{ $alt } } );
 		
 	    }
 	}
@@ -788,6 +828,13 @@ sub process_cnv {
     @data = @new_data;
 }
 
+# What do "-2", "-1", "0", "1", and "2" mean in the copy-number data?
+# These levels are derived from the copy-number analysis algorithms GISTIC or RAE, and indicate the copy-number level per gene. 
+# "-2" is a deep loss, possibly a homozygous deletion, 
+# "-1" is a shallow loss (possibly heterozygous deletion), 
+# "0" is diploid, "1" indicates a low-level gain, 
+# "2" is a high-level amplification. Note that these calls are putative.
+
 sub process_cnv_sample {
 
     my $line = $data[0];
@@ -798,7 +845,7 @@ sub process_cnv_sample {
 	foreach my $entrez( keys %{ $line } ) {
 
 	    # PRAMEF21 (old) & PRAMEF20 (new) both map to entrez 645425
-
+	    
 	    next if ( exists $seen{ $table }{ $entrez } );
 	    
 	    $seen{ $table }{ $entrez } = undef;
@@ -810,19 +857,26 @@ sub process_cnv_sample {
 		
 		next if( ! defined $sample_id );
 		
-		my $alt = $line->{ $entrez }->{ $stable };
-		 
-		next unless( $alt eq '2' || $alt eq '-2' );
-		
-		my $key;
-		$key = "${entrez}_2_high_level_amplification" if( $alt eq '2' );
-		$key = "${entrez}_-2_deep_loss" if( $alt eq '-2' );
+		my %alt_map = ( '-2.0' => '-2',
+				'-1.0' => '-1',
+				'0.0' => '0',
+				'1.0' => '1',
+				'2.0' => '2' );
 
+		my $alt = $line->{ $entrez }->{ $stable };
+
+		$alt = $alt_map{ $alt } if ( exists $alt_map{ $alt } );
+
+		next unless( $alt eq '2' || $alt eq '-2' || $alt eq '1.5' || $alt eq '-1.5' );
+		
+		my $key = sprintf( "%s_%s_%s", $entrez, $alt, $alt_type{ $alt } );
+		
 		my $cnv_id = $mainDB->get_data( -id => 'cnv_id',
 						-val => $key );
 		
 		push( @new_data, { sample_id => $sample_id,
-				   cnv_id => $cnv_id } );
+				   cnv_id => $cnv_id,
+				   alteration_type => $alt_type{ $alt } } );
 		
 	    }
 	    
@@ -988,7 +1042,8 @@ sub load_tcga_cnv {
     
     my $study_id = $mainDB->get_data( -id => 'study_id',
 				      -val => $study_name );
-    
+
+    # Counter
     my $total = `more $options{-f} | wc -l`; chomp $total;
     my @header;
     
@@ -1546,18 +1601,18 @@ sub load_file {
 	my %line;
 
 	@line{ @header } = split( /\t/, $curr );
-	
+
 	if( $options{-s} eq 'genie' ) {
-	    
+
 	    if( exists $line{ cancer_id } ) {
 		
 		# Add Study Specific Information
 		my $cancer_id = $line{cancer_id};
 		$line{cancer_id} = $cancer_id;
-		$line{description} = sprintf "%s (GENIE)", $line{cancer_type_detailed};
+		$line{description} = sprintf "%s (GENIE)", $line{cancer_type};
 		$line{source} = sprintf "%s_%s", $options{ -s }, $options{ -sv };
-
-		my $study_name = sprintf "%s_%s", $cancer_id, $options{-s};
+		
+		my $study_name = sprintf "%s_%s", $line{study}, $options{-s};
 		$line{study_name} = lc( $study_name );
 		
 	    } 
@@ -1568,8 +1623,11 @@ sub load_file {
 
 		# Add Study Specific Information
 		my $cancer_id = uc($line{cancer_id});
-		$line{cancer_id} = $cancer_id;
 
+		# manual overide for cancer id
+		$cancer_id = uc( $options{ -cid } ) if ( defined $options{ -cid } );
+		
+		$line{cancer_id} = $cancer_id;
 		$line{description} = $meta_study{ lc($cancer_id) }{ description };
 		
 		my $study_name = sprintf "%s_%s", $cancer_id, $options{-s};		
@@ -1580,7 +1638,12 @@ sub load_file {
 		if (defined $study_cancer_map{ uc($cancer_id) } ) {
 		    $cancer_id = $study_cancer_map{ $cancer_id };
 		    $line{ cancer_id } = $cancer_id;
-		}		
+		}
+
+		# COADREAD is a speacial case as its a cohort made up of COAD + READ
+		$line{ study_name } = 'coadread_tcga' if( $pwd_study =~ /COADREAD/i );
+		
+
 	    }
 
 	    # capitalize stable id
@@ -1636,11 +1699,17 @@ sub load_file {
 	    if( $options{-s} =~ /genie/ || $options{-s} =~ /tcga/ ) {
 
 		my $hugo = $line{hugo_gene_symbol};
-		
-		next if( $hugo =~ /\|/ );
+
+		# Grab the first (SNORA2)
+		# SNORA2|ENSG00000199959.1
+		if( $hugo =~ /\|/ ) {
+		    my @line = split( /\|/, $hugo );
+		    $hugo = $line[0];
+		}
 		
 		my $entrez = $mainDB->get_data( -id => 'entrez',
-						-hugo => $line{hugo_gene_symbol});
+						-hugo => $hugo );
+
 		if( $entrez eq 'NA' ) {
 
 		    $gen->pprint( -tag => "WARNING",
@@ -1774,7 +1843,7 @@ sub load_file {
 	    $mainDB->print_data( -data => \@data,
 				 -table => $options{ -table },
 				 -fh => $fh );
-	    
+
 	    undef @data;
 	}
 	
@@ -1798,7 +1867,7 @@ sub load_file {
     	foreach my $line ( @data ) {
     	    $cancer_ids{ $line->{cancer_id} } = undef;
     	}
-
+	
 	my $total = keys %cancer_ids;
 
 	if( $total > 1 ) {
@@ -1888,7 +1957,7 @@ sub load_header_map {
 
 }
 
-sub load_meta_tcga {
+sub load_tcga_cancer_type_map {
 
     my $header = 0;
     my @header;
