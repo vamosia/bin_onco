@@ -1,0 +1,24 @@
+#!/usr/bin/perl -w
+
+use Data::Dumper;
+use Generic;
+
+( $#ARGV > -1 ) || die "
+
+DESCRIPTION:
+     Deletes and Rebuilds mainDB database using data from $MAINDB/
+
+USAGE:
+     $0 -v
+
+EXAMPLE:
+     $0 -v -d -sm
+
+OPTIONS :
+     -v     Verbose Mode
+     -d     Debug Mode
+     -sm    Skip Merging of data
+
+AUTHOR:
+    Alexander Butarbutar (ab\@oncodna.com), OncoDNA
+\n\n";

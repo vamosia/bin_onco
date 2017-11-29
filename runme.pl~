@@ -1,0 +1,21 @@
+#!/usr/bin/perl -w
+
+use Data::Dumper;
+
+open( IN, "<$ARGV[0]" );
+
+my %data;
+
+while( <IN> ) {
+    chomp $_;
+
+    my @line = split( /\t/, $_ );
+
+    $data{ $data } = undef;
+}
+
+close( IN );
+
+while( my( $key, $value ) = each( sort{ $a <=> $b } %data ) ) {
+    print "$key\n";
+}

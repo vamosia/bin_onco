@@ -1,0 +1,74 @@
+#!/usr/bin/perl -w
+
+use strict;
+use warnings;
+
+use Data::Dumper;
+use Generic;
+use Getopt::Long;
+use Storable;
+use MainDB;
+use Text::Unidecode;
+use Term::ANSIColor;
+$| = 1;
+my %options = ( -sv => 'release_1.0.1',
+		-mf => "/srv/datahub/mainDB.seedDB/map.tsv" );
+
+GetOptions( "d"      => \$options{ -d },
+	    "dd"     => \$options{ -dd },
+	    "ddd"    => \$options{ -ddd },
+	    "db=s"   => \$options{ -db },
+	    "v"      => \$options{ -v },
+	    "mf=s"   => \$options{ -mf },      # map file path
+	    "e"      => \$options{ -e },       # empty, include empty value to metaDB
+	    "s=s"    => \$options{ -s },       # source
+	    "sv=s"   => \$options{ -sv },      # source version
+	    "a=s"    => \$options{ -a },       # analysis name
+	    "t=s"    => \$options{ -table },   # Table
+	    "f=s"    => \$options{ -f },       # File
+	    "c"      => \$options{ -c },       # Copy to DB
+	    "tr"     => \$options{ -tr }       # Truncate
+    ) or die "Incorrect Options $0!\n";
+
+
+my $gen = new Generic (%options);
+
+unless( defined $options{ -table } ) {
+    $gen->pprint( -tag => "ERROR",
+		  -val => "$0 : -t (MainDB Table) Required" );
+}
+    
+my %copy = ( 
+    study                => qq(study(source, study_name, description)),
+    study_meta           => qq(study_meta(study_id, attr_id, attr_value)),
+    cancer_study         => qq(cancer_study(study_id, cancer_id) ),
+    patient              => qq(patient(stable_patient_id, study_id)),
+    patient_meta         => qq(patient_meta(patient_id, attr_id, attr_value)),
+    sample               => qq(sample(stable_sample_id, cancer_id, patient_id)),
+    sample_meta          => qq(sample_meta(sample_id, attr_id, attr_value)),
+    variant              => qq(variant(varkey, entrez_gene_id, chr, start_position, end_position, ref_allele, var_allele, genome_build, strand)),
+    variant_sample       => qq(variant_sample(sample_id, variant_id)),
+    variant_meta         => qq(variant_meta(variant_id, attr_id, attr_value)),
+    variant_sample_meta  => qq(variant_sample_meta(variant_sample_id, attr_id, attr_value)),
+    analysis             => qq(analysis(study_id, sample_id, name)),
+    analysis_meta        => qq(analysis_meta(analysis_id, attr_id, attr_value)),
+    analysis_data        => qq(analysis_data(analysis_id, entrez_gene_id, attr_id, attr_value))
+    );
+
+
+$gen->pprint( -val => "Copying data_$options{-table}.tsv to database" );    
+
+my $st = qq(sudo -i -u postgres psql $options{-db} -c "set client_encoding to 'latin1';$copy" );
+
+$gen->pprint( -id => "COPY",
+	      -val => $st,
+	      -d => 1 );
+my $a = system($st);
+
+if( $a == -1 ) {
+    $gen->pprint( -tag => "ERROR",
+		  -val => "Copy to database failed" );
+    
+}
+
+

@@ -1,0 +1,11 @@
+#!/usr/bin/perl -w
+
+use strict;
+use Warning;
+use Data::Dumper;
+
+
+while( <STDIN>) {
+    chomp $_;
+    print Dumper $_;
+}

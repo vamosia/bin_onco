@@ -1,0 +1,11 @@
+if [ -z "$1" ]
+then
+    echo "Usage  [DATABASE_NAME] [STUDY_NAME]";
+    exit;
+fi;
+
+if [ -z "$2" ]
+then
+    echo "Usage maindb.build_db [DATABASE_NAME] [STUDY_NAME]";
+    exit;
+fi;

@@ -1,0 +1,5 @@
+#!/bin/sh
+
+TOTAL=`more $1 | wc -l`;
+
+echo $TOTAL;

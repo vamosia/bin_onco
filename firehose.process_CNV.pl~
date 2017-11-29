@@ -1,0 +1,92 @@
+#!/usr/bin/perl -w
+
+use Data::Dumper;
+use strict;
+use MainDB;
+use Getopt::Long;
+
+my %options;
+
+GetOptions( "d"      => \$options{ -d },
+	    "dd"     => \$options{ -dd },
+	    "ddd"    => \$options{ -ddd },
+	    "db=s"   => \$options{ -db },
+	    "v"      => \$options{ -v },
+	    "mf=s"   => \$options{ -mf },      # map file path
+	    "e"      => \$options{ -e },       # empty, include empty value to metaDB
+	    "s=s"    => \$options{ -s },       # source
+	    "sv=s"   => \$options{ -sv },      # source version
+	    "a=s"    => \$options{ -a },       # analysis name
+	    "t=s"    => \$options{ -table },   # Table
+	    "f=s"    => \$options{ -f },       # File
+	    "c"      => \$options{ -c },       # Copy to DB
+	    "tr"     => \$options{ -tr },      # Truncate
+	   "tre"    => \$options{ -tre }      # Truncate & Ex
+    ) or die "Incorrect Options $0!\n";
+
+
+my $mainDB = new MainDB( %options );
+
+open( IN, "head -n 1 tcga_CNV.txt.BAK |" ) or die "$! : tcga_CNV.txt.BAK\n";
+
+my %stable;
+
+while(<IN>){
+    chomp $_;
+    my @line = split( /\t/, $_ );
+    #splice( @line, 0,3 );
+    
+    foreach my $idx ( 0 .. $#line ) {
+	
+	next unless( $line[$idx] =~ /^TCGA/ );
+	my @stable = split( /\-/, $line[$idx] );
+
+	splice( @stable, 4);
+	my $stable = join("-", @stable);
+
+	my $sample_id = $mainDB->get_data( -id => 'sample_id',
+					   -val => $stable,
+					   -tag => 'WARNING' );
+	
+	next if( ! defined $sample_id );
+
+	$stable{ $sample_id } = { stable => $stable,
+				  idx => $idx + 1,
+				  sample_id => $sample_id };
+    }
+}
+
+
+close(IN);
+
+my @sample_list;
+my @stable_list;
+my @idx;
+foreach ( sort { $a <=> $b } keys %stable ) {
+    push( @idx, $stable{ $_ }{ idx });
+    push( @sample_list, $stable{ $_ }{ sample_id } );
+    push( @stable_list, $stable{ $_ }{ stable } );
+}
+
+print "[Sample List] ", join( ",", @sample_list ),"\n";
+print "[Stable List] ", join( ",", @stable_list ),"\n";
+print "[Index  List] ", join( ",", @idx),"\n";
+#my $a = shift( @idx );
+my $ord = q($1"\t"$2"\t"$3"\t");
+foreach ( @idx ) {
+    $ord .= q($) . $_ . q("\t");
+}
+chop $ord;chop $ord;chop $ord;chop $ord;
+
+my $st = qq( awk -F '\t' '{ print $ord }' tcga_CNV.txt.BAK > tcga_CNV.txt );
+
+print "[QUERY] $st\n";
+system( $st );
+
+# my %sample_list;
+# while( <IN> ) {
+#     chomp $_;
+#     my @line = split( /\t/, $_ );
+#     $sample_list{ $line[0] } = $line[2];
+# }
+# close(IN);

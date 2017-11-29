@@ -1,0 +1,27 @@
+#!/usr/bin/perl -w
+use Data::Dumper;
+use Text::Unidecode;
+
+
+
+
+
+
+
+open( IN,"<$ARGV[0]" ) or die( "$!\n" );
+my %uniq;
+while( <IN> ){
+    chomp $_;
+    #$_ =~ s/[^A-Za-z0-9\s\t\-\_]//g;
+    if( $_ =~/(\W)/ ) {
+	$uniq{ $1 } = undef;
+    }
+    
+}
+
+foreach( sort keys %uniq ) {
+   print unidecode($_);
+}
+print "\n";
+
+close( IN );
